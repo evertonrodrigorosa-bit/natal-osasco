@@ -75,6 +75,13 @@ function render() {
 document.addEventListener("focusout", () => setTimeout(() => { if (pending) render(); }, 60));
 
 function draw() {
+  const keep = {};
+  app.querySelectorAll("input[id],textarea[id],select[id]").forEach(el => { keep[el.id] = el.value; });
+  try { drawInner(); } finally {
+    for (const id in keep) { const el = document.getElementById(id); if (el && app.contains(el) && el.value !== keep[id] && keep[id] !== "") el.value = keep[id]; }
+  }
+}
+function drawInner() {
   const role = document.getElementById("role"), stats = document.getElementById("stats");
   let h = S.err ? `<div class="banner">${esc(S.err)}</div>` : "";
   if (!S.chave || !S.d) {
@@ -158,10 +165,10 @@ function equipe() {
   for (const f of fs) {
     if (S.editing === "func:" + f.id) { h += `<div class="p" style="flex-wrap:wrap"><input id="ef-nome" value="${esc(f.nome)}" maxlength="60" data-autofocus style="flex:1 1 140px"><input id="ef-tel" type="tel" inputmode="numeric" value="${esc(fmtTel(f.telefone))}" style="flex:1 1 140px"><button class="primary" data-act="ef-save" data-id="${f.id}">Salvar</button><button data-act="cancel">✕</button></div>`; continue; }
     const n = S.d.tarefas.filter(t => t.resp_id === f.id && !t.fim).length;
-    h += `<div class="p"><span>${esc(f.nome)}<br><small class="note">${esc(fmtTel(f.telefone)) || "sem celular"} · ${n} em aberto</small></span>${f.telefone ? `<a href="https://wa.me/55${f.telefone}?text=${encodeURIComponent("Olá " + f.nome + ", este é o app de tarefas da decoração de Natal: " + location.origin + " . Entre digitando o seu celular.")}" target="_blank" rel="noopener"><button class="ghost">Enviar link</button></a>` : ""}<button class="ghost" data-act="ef" data-id="${f.id}">Editar</button>${confirmBtn("del-func", f.id, "Remover")}</div>`;
+    h += `<div class="p"><span>${esc(f.nome)}<br><small class="note">${esc(fmtTel(f.telefone)) || "sem celular"} · ${n} em aberto</small></span>${f.telefone ? `<a class="zap" href="https://wa.me/55${f.telefone}?text=${encodeURIComponent("Olá " + f.nome + ", este é o app de tarefas da decoração de Natal: " + location.origin + " . Entre digitando o seu celular.")}" target="_blank" rel="noopener">Enviar link</a>` : ""}<button class="ghost" data-act="ef" data-id="${f.id}">Editar</button>${confirmBtn("del-func", f.id, "Remover")}</div>`;
   }
   return h + `</div><div class="panel" style="margin-top:18px"><p class="h3">Link para mandar à equipe</p><p style="margin:0;font-weight:600;overflow-wrap:anywhere">${esc(location.origin)}</p>
-  <div class="row"><button data-act="copiar">Copiar link</button><a href="https://wa.me/?text=${encodeURIComponent("Tarefas da decoração de Natal: " + location.origin)}" target="_blank" rel="noopener"><button>Enviar no WhatsApp</button></a></div></div>`;
+  <div class="row"><button data-act="copiar">Copiar link</button><a class="zap" href="https://wa.me/?text=${encodeURIComponent("Tarefas da decoração de Natal: " + location.origin)}" target="_blank" rel="noopener">Enviar no WhatsApp</a></div></div>`;
 }
 
 function form(t, setorId, paiId) {
@@ -267,7 +274,7 @@ document.addEventListener("click", async ev => {
     case "eo": S.editingObs = id; return draw();
     case "eo-save": { const t = val("eo-txt"); if (!t) return; S.editingObs = null; return acao("PATCH", "/api/obs/" + id, { texto: t }); }
     case "del-obs": return acao("DELETE", "/api/obs/" + id);
-    case "nf-save": { const n = val("nf-nome"), t = val("nf-tel"); if (!n) return document.getElementById("nf-nome").focus(); if (!t) return document.getElementById("nf-tel").focus();
+    case "nf-save": { const n = val("nf-nome"), t = val("nf-tel"); if (!n || !t) { S.err = !n ? "Digite o nome do funcionário." : "Digite o celular com DDD."; draw(); return; }
       await acao("POST", "/api/funcionarios", { nome: n, telefone: t }); if (!S.err) { const a = document.getElementById("nf-nome"), b2 = document.getElementById("nf-tel"); if (a) a.value = ""; if (b2) b2.value = ""; } return; }
     case "ef": S.editing = "func:" + id; return draw();
     case "ef-save": { const n = val("ef-nome"); if (!n) return; S.editing = null; return acao("PATCH", "/api/funcionarios/" + id, { nome: n, telefone: val("ef-tel") }); }
