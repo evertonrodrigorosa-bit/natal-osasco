@@ -1,0 +1,24 @@
+databases:
+  - name: natal-osasco-db
+    plan: free
+    region: ohio
+    postgresMajorVersion: "16"
+    databaseName: natal_osasco_db
+    user: natal_osasco_db_user
+
+services:
+  - type: web
+    name: natal-osasco
+    runtime: node
+    plan: free
+    region: ohio
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: natal-osasco-db
+          property: connectionString
+      - key: GESTOR_SENHA
+        sync: false
