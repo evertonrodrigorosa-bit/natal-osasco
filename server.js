@@ -173,8 +173,9 @@ app.delete("/api/obs/:id", w(async (req, res) => {
 // Anexos (fotos JPG/PNG e PDF) guardados no banco
 const TIPOS = { "image/jpeg": 1, "image/png": 1, "image/webp": 1, "application/pdf": 1 };
 app.post("/api/tarefas/:id/anexos", gestor, express.raw({ type: () => true, limit: "12mb" }), w(async (req, res) => {
-  const tipo = String(req.get("content-type") || "").split(";")[0].trim();
-  if (!TIPOS[tipo]) return res.status(400).json({ erro: "Envie foto (JPG ou PNG) ou PDF." });
+  let tipo = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  if (tipo === "image/jpg" || tipo === "image/pjpeg") tipo = "image/jpeg";
+  if (!TIPOS[tipo]) return res.status(400).json({ erro: "Formato não aceito. Envie foto (JPG, JPEG ou PNG) ou PDF. Foto HEIC do iPhone: tire print ou exporte como JPG." });
   if (!req.body || !req.body.length) return res.status(400).json({ erro: "Arquivo vazio." });
   const nome = (decodeURIComponent(req.get("x-nome") || "arquivo")).slice(0, 120);
   const [t] = await q("SELECT id FROM tarefas WHERE id=$1", [req.params.id]);

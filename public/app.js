@@ -208,7 +208,7 @@ function card(t) {
     }
     if (!anx.length) h += `<p class="note">Nenhuma foto ou PDF ainda.</p>`;
     h += `</div>`;
-    if (G()) h += `<label class="upl"><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple data-upl="${t.id}" hidden>📎 Anexar foto ou PDF</label>`;
+    if (G()) h += `<label class="upl"><input type="file" accept="image/*,.jpg,.jpeg,.png,.heic,.pdf,application/pdf" multiple data-upl="${t.id}" hidden>📎 Anexar foto ou PDF</label>`;
   }
   h += `<p class="h3">Observações</p><div class="obs-list">`;
   if (!obs.length) h += `<p class="note">Sem observações.</p>`;
@@ -299,14 +299,22 @@ document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id
   if (e.key === "Enter" && e.target.id === "tel") document.querySelector('[data-act="login-f"]').click(); });
 
 /* ---------- anexos ---------- */
-function reduzir(file) {
+function tipoDe(f) {
+  if (f.type) return f.type === "image/jpg" ? "image/jpeg" : f.type;
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  return { jpg: "image/jpeg", jpeg: "image/jpeg", jfif: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic", heif: "image/heif", pdf: "application/pdf" }[ext] || "";
+}
+function reduzir(file0) {
+  const tipo = tipoDe(file0), file = tipo === file0.type ? file0 : new File([file0], file0.name, { type: tipo });
   return new Promise(res => {
-    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 600 * 1024) return res(file);
+    if (!tipo.startsWith("image/")) return res(file);
+    const nativo = /^image\/(jpeg|png|webp)$/.test(tipo);
+    if (nativo && file.size < 600 * 1024) return res(file);
     const img = new Image(), u = URL.createObjectURL(file);
     img.onload = () => { const max = 2000, k = Math.min(1, max / Math.max(img.width, img.height));
       const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(u);
-      c.toBlob(b => res(b && b.size < file.size ? new File([b], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file), "image/jpeg", 0.82); };
+      c.toBlob(b => res(b && (!nativo || b.size < file.size) ? new File([b], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file), "image/jpeg", 0.82); };
     img.onerror = () => { URL.revokeObjectURL(u); res(file); };
     img.src = u;
   });
