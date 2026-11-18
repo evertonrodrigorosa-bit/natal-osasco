@@ -56,7 +56,7 @@ app.use("/api", async (req, res, next) => {
 });
 const gestor = (req, res, next) => req.eu.tipo === "gestor" ? next() : res.status(403).json({ erro: "Só o gestor pode fazer isso." });
 const txt = (v, max) => { const s = String(v ?? "").trim(); return s && s.length <= max ? s : null; };
-const prazoOk = v => (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : null;
+const prazoOk = v => (v && /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(v)) ? v : null;
 const w = fn => (req, res, next) => fn(req, res).catch(next);
 const novoToken = () => crypto.randomBytes(12).toString("base64url");
 

@@ -10,8 +10,9 @@ const S = { chave: ls.get("chave"), d: null, nomes: null, tab: null, open: new S
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtDT = ms => ms ? new Date(Number(ms)).toLocaleString("pt-BR", { timeZone: TZ, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
-const fmtD = s => { if (!s) return "Sem prazo"; const [y, m, d] = s.split("-"); return `${d}/${m}/${y}`; };
-const hoje = () => new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+const fmtD = s => { if (!s) return "Sem prazo"; const [dt, hr] = s.split("T"); const [y, m, d] = dt.split("-"); return `${d}/${m}/${y}` + (hr ? ` às ${hr}` : ""); };
+const agora = () => new Date().toLocaleString("sv-SE", { timeZone: TZ }).slice(0, 16).replace(" ", "T");
+const atrasado = p => !!p && (p.includes("T") ? p < agora() : p < agora().slice(0, 10));
 
 async function api(method, url, body) {
   const r = await fetch(url, { method, headers: { "content-type": "application/json", "x-chave": S.chave || "" }, body: body ? JSON.stringify(body) : undefined });
@@ -29,7 +30,7 @@ const bloqueada = t => { const p = pai(t); return !!(p && !p.fim && !t.inicio); 
 function estado(t) {
   if (t.fim) return "ok";
   if (bloqueada(t)) return "bloq";
-  const late = t.prazo && t.prazo < hoje();
+  const late = atrasado(t.prazo);
   if (t.inicio) return late ? "late-run" : "run";
   return late ? "late" : "pend";
 }
@@ -167,7 +168,7 @@ function form(t, setorId, paiId) {
   const opts = `<option value="">Sem responsável</option>` + S.d.funcionarios.map(f => `<option value="${f.id}" ${t && t.resp_id === f.id ? "selected" : ""}>${esc(f.nome)}</option>`).join("");
   return `<div class="panel"><label class="f">Tarefa<textarea id="tf-desc" maxlength="500" placeholder="Ex.: Instalar cascata de luz na fachada" data-autofocus>${esc(t ? t.descricao : "")}</textarea></label>
   <div class="grid2"><label class="f">Responsável<select id="tf-resp">${opts}</select></label>
-  <label class="f">Prazo<input id="tf-prazo" type="date" value="${t && t.prazo ? t.prazo : ""}"></label></div>
+  <label class="f">Prazo (dia e hora)<input id="tf-prazo" type="datetime-local" value="${t && t.prazo ? (t.prazo.includes("T") ? t.prazo : t.prazo + "T18:00") : ""}"></label></div>
   ${S.d.funcionarios.length ? "" : `<p class="note">Cadastre a equipe na aba <b>Equipe</b> para escolher o responsável.</p>`}
   <div class="row"><button class="primary" data-act="tf-save" data-id="${t ? t.id : ""}" data-setor="${setorId}" data-pai="${paiId || ""}">${t ? "Salvar" : paiId ? "Criar subtarefa" : "Criar tarefa"}</button><button data-act="cancel">Cancelar</button></div></div>`;
 }
