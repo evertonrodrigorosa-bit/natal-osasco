@@ -187,7 +187,7 @@ function card(t) {
   const obs = S.d.obs.filter(o => o.tarefa_id === t.id), subs = t.parent_id ? [] : filhos(t.id);
   let h = `<article class="task ${open ? "open" : ""} ${mine ? "mine" : ""}"><div class="task-h" data-act="toggle" data-id="${t.id}">
   <div class="t"><div class="d">${esc(t.descricao)}</div><div class="meta"><span>👤 ${esc(nome(t.resp_id))}${mine ? " (você)" : ""}</span>
-  <span class="${e.startsWith("late") ? "late-txt" : ""}">📅 ${fmtD(t.prazo)}</span>${obs.length ? `<span>💬 ${obs.length}</span>` : ""}${subs.length ? `<span>☑ ${subs.filter(x => x.fim).length}/${subs.length} subtarefas${!t.fim ? " esperando" : ""}</span>` : ""}</div></div>
+  <span class="${e.startsWith("late") ? "late-txt" : ""}">📅 ${fmtD(t.prazo)}</span>${obs.length ? `<span>💬 ${obs.length}</span>` : ""}${(S.d.anexos || []).some(x => x.tarefa_id === t.id) ? `<span>📎 ${(S.d.anexos || []).filter(x => x.tarefa_id === t.id).length}</span>` : ""}${subs.length ? `<span>☑ ${subs.filter(x => x.fim).length}/${subs.length} subtarefas${!t.fim ? " esperando" : ""}</span>` : ""}</div></div>
   <span class="pill ${pill[0]}">${pill[1]}</span><span class="chev" aria-hidden="true">›</span></div>`;
   if (!open) return h + `</article>`;
   h += `<div class="task-b"><div class="times"><div><b>Início</b>${fmtDT(t.inicio)}</div><div><b>Fim</b>${fmtDT(t.fim)}</div></div>`;
@@ -198,6 +198,18 @@ function card(t) {
   else if (mine && !t.inicio) h += `<div class="row"><button class="primary big" data-act="iniciar" data-id="${t.id}">▶ Iniciar tarefa</button></div>`;
   else if (mine && !t.fim) h += `<div class="row"><button class="primary big" data-act="finalizar" data-id="${t.id}">✔ Finalizar tarefa</button></div>`;
   if (G() && (t.inicio || t.fim)) h += `<div class="row">${confirmBtn("zerar", t.id, "Zerar início e fim")}</div>`;
+  const anx = (S.d.anexos || []).filter(x => x.tarefa_id === t.id);
+  if (anx.length || G()) {
+    h += `<p class="h3">Onde instalar</p><div class="anexos">`;
+    for (const x of anx) {
+      const url = `/api/anexos/${x.id}?k=${encodeURIComponent(S.chave)}`;
+      h += `<div class="anx">${x.tipo.startsWith("image/") ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${esc(x.nome)}" loading="lazy"></a>`
+        : `<a class="pdf" href="${url}" target="_blank" rel="noopener">📄 ${esc(x.nome)}</a>`}${G() ? confirmBtn("del-anx", x.id, "Apagar") : ""}</div>`;
+    }
+    if (!anx.length) h += `<p class="note">Nenhuma foto ou PDF ainda.</p>`;
+    h += `</div>`;
+    if (G()) h += `<label class="upl"><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple data-upl="${t.id}" hidden>📎 Anexar foto ou PDF</label>`;
+  }
   h += `<p class="h3">Observações</p><div class="obs-list">`;
   if (!obs.length) h += `<p class="note">Sem observações.</p>`;
   for (const o of obs) {
@@ -273,6 +285,7 @@ document.addEventListener("click", async ev => {
     case "ob": { const el = document.getElementById("ob-" + id); const t = el ? el.value.trim() : ""; if (!t) return; el.value = ""; el.blur(); return acao("POST", `/api/tarefas/${id}/obs`, { texto: t }); }
     case "eo": S.editingObs = id; return draw();
     case "eo-save": { const t = val("eo-txt"); if (!t) return; S.editingObs = null; return acao("PATCH", "/api/obs/" + id, { texto: t }); }
+    case "del-anx": return acao("DELETE", "/api/anexos/" + id);
     case "del-obs": return acao("DELETE", "/api/obs/" + id);
     case "nf-save": { const n = val("nf-nome"), t = val("nf-tel"); if (!n || !t) { S.err = !n ? "Digite o nome do funcionário." : "Digite o celular com DDD."; draw(); return; }
       await acao("POST", "/api/funcionarios", { nome: n, telefone: t }); if (!S.err) { const a = document.getElementById("nf-nome"), b2 = document.getElementById("nf-tel"); if (a) a.value = ""; if (b2) b2.value = ""; } return; }
@@ -284,6 +297,34 @@ document.addEventListener("click", async ev => {
 });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id === "senha") document.querySelector('[data-act="login-g"]').click();
   if (e.key === "Enter" && e.target.id === "tel") document.querySelector('[data-act="login-f"]').click(); });
+
+/* ---------- anexos ---------- */
+function reduzir(file) {
+  return new Promise(res => {
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 600 * 1024) return res(file);
+    const img = new Image(), u = URL.createObjectURL(file);
+    img.onload = () => { const max = 2000, k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(u);
+      c.toBlob(b => res(b && b.size < file.size ? new File([b], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file), "image/jpeg", 0.82); };
+    img.onerror = () => { URL.revokeObjectURL(u); res(file); };
+    img.src = u;
+  });
+}
+document.addEventListener("change", async ev => {
+  const inp = ev.target.closest("input[data-upl]"); if (!inp || !inp.files.length) return;
+  const id = inp.dataset.upl, files = [...inp.files]; inp.value = "";
+  S.busy = true; S.err = ""; const lbl = inp.parentElement; if (lbl) lbl.textContent = "Enviando…";
+  try {
+    for (const f0 of files) {
+      const f = await reduzir(f0);
+      if (f.size > 12 * 1024 * 1024) throw new Error(`"${f0.name}" passa de 12 MB.`);
+      const r = await fetch(`/api/tarefas/${id}/anexos`, { method: "POST", headers: { "content-type": f.type, "x-chave": S.chave, "x-nome": encodeURIComponent(f.name) }, body: f });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || "Falha ao enviar o arquivo.");
+    }
+  } catch (e) { S.err = e.message; }
+  S.busy = false; carregar();
+});
 
 /* ---------- atualização automática ---------- */
 setInterval(() => { if (S.chave && !document.hidden && !S.busy) carregar(); }, 5000);

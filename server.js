@@ -22,6 +22,8 @@ async function migrar() {
     autor_id INT REFERENCES funcionarios(id) ON DELETE CASCADE, gestor BOOLEAN NOT NULL DEFAULT false,
     texto TEXT NOT NULL, em BIGINT NOT NULL, editado BIGINT);
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS telefone TEXT UNIQUE;
+  CREATE TABLE IF NOT EXISTS anexos(id SERIAL PRIMARY KEY, tarefa_id INT NOT NULL REFERENCES tarefas(id) ON DELETE CASCADE,
+    nome TEXT NOT NULL, tipo TEXT NOT NULL, tamanho INT NOT NULL, dados BYTEA NOT NULL, em BIGINT NOT NULL);
   ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES tarefas(id) ON DELETE CASCADE;`);
 }
 
@@ -48,7 +50,7 @@ app.post("/api/gestor", (req, res) => {
 const igual = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 app.use("/api", async (req, res, next) => {
   try {
-    const k = req.get("x-chave") || "";
+    const k = req.get("x-chave") || (req.method === "GET" && typeof req.query.k === "string" ? req.query.k : "");
     if (k && SENHAS.some(x => igual(k, x))) { req.eu = { tipo: "gestor" }; return next(); }
     if (k) { const [f] = await q("SELECT id,nome FROM funcionarios WHERE token=$1", [k]);
       if (f) { req.eu = { tipo: "func", id: f.id, nome: f.nome }; return next(); } }
@@ -66,7 +68,8 @@ app.get("/api/estado", w(async (req, res) => {
   const [setores, tarefas, obs, func] = await Promise.all([
     q("SELECT * FROM setores ORDER BY criado"), q("SELECT * FROM tarefas ORDER BY id"),
     q("SELECT * FROM obs ORDER BY em"), q("SELECT id,nome,telefone FROM funcionarios ORDER BY nome")]);
-  res.json({ eu: req.eu, setores, tarefas, obs, funcionarios: func });
+  const anexos = await q("SELECT id,tarefa_id,nome,tipo,tamanho,em FROM anexos ORDER BY id");
+  res.json({ eu: req.eu, setores, tarefas, obs, funcionarios: func, anexos });
 }));
 
 // Funcionários
@@ -166,6 +169,30 @@ app.delete("/api/obs/:id", w(async (req, res) => {
   if (!r.length) return res.status(403).json({ erro: "Essa observação não pode ser apagada." });
   res.json({ ok: 1 });
 }));
+
+// Anexos (fotos JPG/PNG e PDF) guardados no banco
+const TIPOS = { "image/jpeg": 1, "image/png": 1, "image/webp": 1, "application/pdf": 1 };
+app.post("/api/tarefas/:id/anexos", gestor, express.raw({ type: () => true, limit: "12mb" }), w(async (req, res) => {
+  const tipo = String(req.get("content-type") || "").split(";")[0].trim();
+  if (!TIPOS[tipo]) return res.status(400).json({ erro: "Envie foto (JPG ou PNG) ou PDF." });
+  if (!req.body || !req.body.length) return res.status(400).json({ erro: "Arquivo vazio." });
+  const nome = (decodeURIComponent(req.get("x-nome") || "arquivo")).slice(0, 120);
+  const [t] = await q("SELECT id FROM tarefas WHERE id=$1", [req.params.id]);
+  if (!t) return res.status(404).json({ erro: "Tarefa não encontrada." });
+  const [{ total }] = await q("SELECT COALESCE(SUM(tamanho),0)::bigint AS total FROM anexos");
+  if (Number(total) + req.body.length > 800 * 1024 * 1024) return res.status(400).json({ erro: "Espaço de anexos cheio. Apague anexos antigos." });
+  await q("INSERT INTO anexos(tarefa_id,nome,tipo,tamanho,dados,em) VALUES($1,$2,$3,$4,$5,$6)", [t.id, nome, tipo, req.body.length, req.body, Date.now()]);
+  res.json({ ok: 1 });
+}));
+app.get("/api/anexos/:id", w(async (req, res) => {
+  const [a] = await q("SELECT nome,tipo,dados FROM anexos WHERE id=$1", [req.params.id]);
+  if (!a) return res.status(404).send("Arquivo não encontrado");
+  res.set("Content-Type", a.tipo);
+  res.set("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(a.nome)}`);
+  res.set("Cache-Control", "private, max-age=86400");
+  res.send(a.dados);
+}));
+app.delete("/api/anexos/:id", gestor, w(async (req, res) => { await q("DELETE FROM anexos WHERE id=$1", [req.params.id]); res.json({ ok: 1 }); }));
 
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ erro: "Erro no servidor. Tente de novo." }); });
 
