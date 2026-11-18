@@ -3,8 +3,8 @@ const crypto = require("crypto");
 const path = require("path");
 const { Pool } = require("pg");
 
-const SENHA = process.env.GESTOR_SENHA;
-if (!SENHA) { console.error("Defina GESTOR_SENHA"); process.exit(1); }
+const SENHAS = String(process.env.GESTOR_SENHA || "").split(",").map(x => x.trim()).filter(Boolean);
+if (!SENHAS.length) { console.error("Defina GESTOR_SENHA"); process.exit(1); }
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.PGSSL === "off" ? false : { rejectUnauthorized: false },
@@ -40,7 +40,8 @@ app.post("/api/entrar", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 app.post("/api/gestor", (req, res) => {
-  if (igual(req.body.senha || "", SENHA)) return res.json({ chave: SENHA });
+  const ok = SENHAS.find(x => igual(req.body.senha || "", x));
+  if (ok) return res.json({ chave: ok });
   res.status(401).json({ erro: "Senha incorreta." });
 });
 
@@ -48,7 +49,7 @@ const igual = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(Stri
 app.use("/api", async (req, res, next) => {
   try {
     const k = req.get("x-chave") || "";
-    if (k && igual(k, SENHA)) { req.eu = { tipo: "gestor" }; return next(); }
+    if (k && SENHAS.some(x => igual(k, x))) { req.eu = { tipo: "gestor" }; return next(); }
     if (k) { const [f] = await q("SELECT id,nome FROM funcionarios WHERE token=$1", [k]);
       if (f) { req.eu = { tipo: "func", id: f.id, nome: f.nome }; return next(); } }
     res.status(401).json({ erro: "Acesso expirado. Toque no seu nome para entrar de novo." });
