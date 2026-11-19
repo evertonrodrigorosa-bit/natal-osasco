@@ -24,6 +24,7 @@ async function migrar() {
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS telefone TEXT UNIQUE;
   CREATE TABLE IF NOT EXISTS anexos(id SERIAL PRIMARY KEY, tarefa_id INT NOT NULL REFERENCES tarefas(id) ON DELETE CASCADE,
     nome TEXT NOT NULL, tipo TEXT NOT NULL, tamanho INT NOT NULL, dados BYTEA NOT NULL, em BIGINT NOT NULL);
+  ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS ciente BIGINT;
   ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES tarefas(id) ON DELETE CASCADE;`);
 }
 
@@ -118,7 +119,7 @@ app.post("/api/tarefas", gestor, w(async (req, res) => {
 }));
 app.patch("/api/tarefas/:id", gestor, w(async (req, res) => {
   const d = dadosTarefa(req.body); if (!d) return res.status(400).json({ erro: "Descreva a tarefa." });
-  await q("UPDATE tarefas SET descricao=$1,resp_id=$2,prazo=$3 WHERE id=$4", [...d, req.params.id]); res.json({ ok: 1 });
+  await q("UPDATE tarefas SET ciente=CASE WHEN resp_id IS DISTINCT FROM $2 THEN NULL ELSE ciente END, descricao=$1,resp_id=$2,prazo=$3 WHERE id=$4", [...d, req.params.id]); res.json({ ok: 1 });
 }));
 app.delete("/api/tarefas/:id", gestor, w(async (req, res) => { await q("DELETE FROM tarefas WHERE id=$1", [req.params.id]); res.json({ ok: 1 }); }));
 
@@ -134,8 +135,14 @@ async function liberada(t, res) {
   if (!p || p.fim) return true;
   res.status(400).json({ erro: "Esta subtarefa só libera quando a tarefa principal for finalizada." }); return false;
 }
+app.post("/api/tarefas/:id/ciente", w(async (req, res) => {
+  const t = await minhaTarefa(req, res); if (!t) return;
+  if (req.eu.tipo !== "func") return res.status(403).json({ erro: "Só o responsável confirma que está ciente." });
+  await q("UPDATE tarefas SET ciente=COALESCE(ciente,$1) WHERE id=$2", [Date.now(), t.id]); res.json({ ok: 1 });
+}));
 app.post("/api/tarefas/:id/iniciar", w(async (req, res) => {
   const t = await minhaTarefa(req, res); if (!t || !(await liberada(t, res))) return;
+  if (req.eu.tipo === "func" && !t.ciente) return res.status(400).json({ erro: "Aperte \"Estou ciente\" antes de iniciar." });
   await q("UPDATE tarefas SET inicio=COALESCE(inicio,$1) WHERE id=$2", [Date.now(), t.id]); res.json({ ok: 1 });
 }));
 app.post("/api/tarefas/:id/finalizar", w(async (req, res) => {

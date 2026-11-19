@@ -42,7 +42,7 @@ function marcarVistas(ids) { const v = vistas(); ids.forEach(i => v.add(i)); ls.
 function novas() {
   if (!S.d || G()) return [];
   const v = vistas();
-  return S.d.tarefas.filter(t => t.resp_id === EU() && !t.inicio && !t.fim && !bloqueada(t) && !v.has(t.id));
+  return S.d.tarefas.filter(t => t.resp_id === EU() && !t.inicio && !t.fim && !t.ciente && !bloqueada(t) && !v.has(t.id));
 }
 let ultimoAviso = null;
 function avisar() {
@@ -104,6 +104,12 @@ function drawInner() {
   h += `<nav class="tabs">${tabs.map(([k, l]) => `<button data-act="tab" data-k="${k}" class="${S.tab === k ? "on" : ""}">${l}</button>`).join("")}</nav>`;
 
   if (S.tab === "equipe") { app.innerHTML = h + equipe(); return; }
+  if (!G() && !ls.get("intro_" + EU())) h += `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="intro-t"><div class="modal-c">
+    <h2 id="intro-t">Antes de começar, ${esc(S.d.eu.nome)}</h2>
+    <ol><li>Quando receber uma tarefa, abra e aperte <b>✋ Estou ciente</b>. Assim o gestor sabe que você viu.</li>
+    <li>Aperte <b>▶ Iniciar</b> só na hora que for começar o trabalho de verdade.</li>
+    <li>Quando terminar, <b>não esqueça de apertar ✔ Finalizar</b>. Se não apertar, o app continua contando como se você ainda estivesse nessa tarefa, e isso pode gerar dúvida sobre o seu trabalho.</li></ol>
+    <button class="primary big" data-act="intro-ok">Entendi</button></div></div>`;
 
   if (G() && S.newSetor) h += `<div class="panel"><label class="f">Nome do setor<input id="ns-nome" placeholder="Ex.: Praça da Matriz" maxlength="80" data-autofocus></label><div class="row"><button class="primary" data-act="ns-save">Criar setor</button><button data-act="cancel">Cancelar</button></div></div>`;
 
@@ -187,10 +193,12 @@ function card(t) {
   const obs = S.d.obs.filter(o => o.tarefa_id === t.id), subs = t.parent_id ? [] : filhos(t.id);
   let h = `<article class="task ${open ? "open" : ""} ${mine ? "mine" : ""}"><div class="task-h" data-act="toggle" data-id="${t.id}">
   <div class="t"><div class="d">${esc(t.descricao)}</div><div class="meta"><span>👤 ${esc(nome(t.resp_id))}${mine ? " (você)" : ""}</span>
-  <span class="${e.startsWith("late") ? "late-txt" : ""}">📅 ${fmtD(t.prazo)}</span>${obs.length ? `<span>💬 ${obs.length}</span>` : ""}${(S.d.anexos || []).some(x => x.tarefa_id === t.id) ? `<span>📎 ${(S.d.anexos || []).filter(x => x.tarefa_id === t.id).length}</span>` : ""}${subs.length ? `<span>☑ ${subs.filter(x => x.fim).length}/${subs.length} subtarefas${!t.fim ? " esperando" : ""}</span>` : ""}</div></div>
+  <span class="${e.startsWith("late") ? "late-txt" : ""}">📅 ${fmtD(t.prazo)}</span>${t.resp_id && !t.fim ? (t.ciente ? `<span class="ok-txt">✔ Ciente</span>` : `<span class="late-txt">⚠ ${mine ? "Confirme que está ciente" : "Ainda não confirmou"}</span>`) : ""}${obs.length ? `<span>💬 ${obs.length}</span>` : ""}${(S.d.anexos || []).some(x => x.tarefa_id === t.id) ? `<span>📎 ${(S.d.anexos || []).filter(x => x.tarefa_id === t.id).length}</span>` : ""}${subs.length ? `<span>☑ ${subs.filter(x => x.fim).length}/${subs.length} subtarefas${!t.fim ? " esperando" : ""}</span>` : ""}</div></div>
   <span class="pill ${pill[0]}">${pill[1]}</span><span class="chev" aria-hidden="true">›</span></div>`;
   if (!open) return h + `</article>`;
-  h += `<div class="task-b"><div class="times"><div><b>Início</b>${fmtDT(t.inicio)}</div><div><b>Fim</b>${fmtDT(t.fim)}</div></div>`;
+  if (mine && !t.ciente && !t.fim) return h + `<div class="task-b"><div class="ciente-box"><p><b>Esta tarefa foi passada para você.</b> Confirme que viu e está ciente para abrir os detalhes.</p>
+    <button class="primary big" data-act="ciente" data-id="${t.id}">✋ ESTOU CIENTE</button></div></div></article>`;
+  h += `<div class="task-b"><div class="times three"><div><b>Ciente</b>${fmtDT(t.ciente)}</div><div><b>Início</b>${fmtDT(t.inicio)}</div><div><b>Fim</b>${fmtDT(t.fim)}</div></div>`;
   const p = pai(t), esperando = t.fim ? [] : filhos(t.id).filter(c => !c.fim);
   if (p && !p.fim) h += `<p class="wait">🔒 Libera quando <b>${esc(nome(p.resp_id))}</b> finalizar “${esc(p.descricao)}”.</p>`;
   if (!t.parent_id && esperando.length) h += `<p class="wait">⏳ ${esperando.length === 1 ? "1 subtarefa depende" : esperando.length + " subtarefas dependem"} desta: ${esc([...new Set(esperando.map(c => nome(c.resp_id)))].join(", "))}.</p>`;
@@ -255,6 +263,8 @@ document.addEventListener("click", async ev => {
   if (act !== "ask") S.confirm = null;
   switch (act) {
     case "ver-novas": { const n = novas(); marcarVistas(n.map(t => t.id)); S.tab = "minhas"; n.forEach(t => { S.open.add(t.id); if (t.parent_id) S.open.add(t.parent_id); }); return draw(); }
+    case "ciente": return acao("POST", `/api/tarefas/${id}/ciente`);
+    case "intro-ok": ls.set("intro_" + EU(), "1"); return draw();
     case "permitir": try { await Notification.requestPermission(); } catch (e) {} return draw();
     case "tab": S.tab = b.dataset.k; S.editing = null; return draw();
     case "toggle": S.open.has(id) ? S.open.delete(id) : S.open.add(id); return draw();
