@@ -2,6 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const path = require("path");
 const { Pool } = require("pg");
+const webpush = require("web-push");
 
 const SENHAS = String(process.env.GESTOR_SENHA || "").split(",").map(x => x.trim()).filter(Boolean);
 if (!SENHAS.length) { console.error("Defina GESTOR_SENHA"); process.exit(1); }
@@ -35,13 +36,35 @@ async function migrar() {
   CREATE TABLE IF NOT EXISTS tarefa_pessoas(tarefa_id INT NOT NULL REFERENCES tarefas(id) ON DELETE CASCADE,
     func_id INT NOT NULL REFERENCES funcionarios(id) ON DELETE CASCADE,
     ciente BIGINT, inicio BIGINT, fim BIGINT, PRIMARY KEY(tarefa_id, func_id));
-  CREATE INDEX IF NOT EXISTS tarefa_pessoas_func ON tarefa_pessoas(func_id);`);
+  CREATE INDEX IF NOT EXISTS tarefa_pessoas_func ON tarefa_pessoas(func_id);
+  -- Versão 3: modelos, avisos no celular e foto de conclusão
+  CREATE TABLE IF NOT EXISTS modelos(id SERIAL PRIMARY KEY, titulo TEXT NOT NULL, detalhes TEXT, prioridade TEXT NOT NULL DEFAULT 'normal',
+    pessoas INT[] NOT NULL DEFAULT '{}', criado BIGINT NOT NULL);
+  CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY, valor TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS push(endpoint TEXT PRIMARY KEY, func_id INT REFERENCES funcionarios(id) ON DELETE CASCADE,
+    gestor BOOLEAN NOT NULL DEFAULT false, dados TEXT NOT NULL, criado BIGINT NOT NULL);
+  ALTER TABLE tarefa_pessoas ADD COLUMN IF NOT EXISTS avisado_prazo BIGINT;
+  ALTER TABLE anexos ADD COLUMN IF NOT EXISTS conclusao BOOLEAN NOT NULL DEFAULT false;`);
   // Leva as tarefas antigas (um responsável) para o novo formato, uma vez só
   await q(`
   INSERT INTO tarefa_pessoas(tarefa_id,func_id,ciente,inicio,fim)
     SELECT id,resp_id,ciente,inicio,fim FROM tarefas WHERE v2 IS NULL AND resp_id IS NOT NULL ON CONFLICT DO NOTHING;
   UPDATE tarefas SET v2=true WHERE v2 IS NULL;`);
+  // Chaves dos avisos no celular: criadas uma vez e guardadas no banco
+  let [k] = await q("SELECT valor FROM config WHERE chave='vapid'");
+  if (!k) { const v = webpush.generateVAPIDKeys(); await q("INSERT INTO config(chave,valor) VALUES('vapid',$1) ON CONFLICT DO NOTHING", [JSON.stringify(v)]);
+    [k] = await q("SELECT valor FROM config WHERE chave='vapid'"); }
+  VAPID = JSON.parse(k.valor);
+  webpush.setVapidDetails("mailto:avisos@natal-osasco.app", VAPID.publicKey, VAPID.privateKey);
 }
+let VAPID = null;
+async function avisarCelular(onde, payload) {
+  const subs = onde.gestor ? await q("SELECT * FROM push WHERE gestor=true")
+    : onde.func.length ? await q("SELECT * FROM push WHERE func_id = ANY($1)", [onde.func]) : [];
+  await Promise.all(subs.map(s => webpush.sendNotification(JSON.parse(s.dados), JSON.stringify(payload), { TTL: 6 * 3600 })
+    .catch(e => { if (e.statusCode === 404 || e.statusCode === 410) return q("DELETE FROM push WHERE endpoint=$1", [s.endpoint]); console.error("push", e.statusCode || e.message); })));
+}
+const avisoSeguro = (onde, payload) => avisarCelular(onde, payload).catch(e => console.error("push", e.message));
 
 const app = express();
 app.use(express.json({ limit: "100kb" }));
@@ -85,8 +108,9 @@ app.get("/api/estado", w(async (req, res) => {
     const [setores, tarefas, pessoas, obs, func, anexos] = await Promise.all([
       q("SELECT id,nome FROM setores"), q("SELECT * FROM tarefas ORDER BY id"), q("SELECT * FROM tarefa_pessoas"),
       q("SELECT * FROM obs ORDER BY em"), q("SELECT id,nome,telefone FROM funcionarios ORDER BY nome"),
-      q("SELECT id,tarefa_id,nome,tipo,tamanho,em,autor_id FROM anexos ORDER BY id")]);
-    return res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos });
+      q("SELECT id,tarefa_id,nome,tipo,tamanho,em,autor_id,conclusao FROM anexos ORDER BY id")]);
+    const modelos = await q("SELECT * FROM modelos ORDER BY titulo");
+    return res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos, modelos });
   }
   // Colaborador: só as tarefas em que ele está (e os colegas dessas tarefas)
   const ids = (await q("SELECT tarefa_id FROM tarefa_pessoas WHERE func_id=$1", [req.eu.id])).map(r => r.tarefa_id);
@@ -94,7 +118,7 @@ app.get("/api/estado", w(async (req, res) => {
     q("SELECT id,nome FROM setores"), q("SELECT * FROM tarefas WHERE id = ANY($1) ORDER BY id", [ids]),
     q("SELECT * FROM tarefa_pessoas WHERE tarefa_id = ANY($1)", [ids]), q("SELECT * FROM obs WHERE tarefa_id = ANY($1) ORDER BY em", [ids]),
     q("SELECT id,nome FROM funcionarios ORDER BY nome"),
-    q("SELECT id,tarefa_id,nome,tipo,tamanho,em,autor_id FROM anexos WHERE tarefa_id = ANY($1) ORDER BY id", [ids])]);
+    q("SELECT id,tarefa_id,nome,tipo,tamanho,em,autor_id,conclusao FROM anexos WHERE tarefa_id = ANY($1) ORDER BY id", [ids])]);
   res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos });
 }));
 
@@ -133,6 +157,8 @@ app.post("/api/tarefas", gestor, w(async (req, res) => {
   const [t] = await q("INSERT INTO tarefas(descricao,detalhes,prazo,prioridade,criado,v2) VALUES($1,$2,$3,$4,$5,true) RETURNING id",
     [d.titulo, d.detalhes, d.prazo, d.prioridade, Date.now()]);
   await q("INSERT INTO tarefa_pessoas(tarefa_id,func_id) SELECT $1, unnest($2::int[])", [t.id, d.pessoas]);
+  if (req.body.salvarModelo) await q("INSERT INTO modelos(titulo,detalhes,prioridade,pessoas,criado) VALUES($1,$2,$3,$4,$5)", [d.titulo, d.detalhes, d.prioridade, d.pessoas, Date.now()]);
+  avisoSeguro({ func: d.pessoas }, { title: "Tarefa nova" + (d.prioridade === "alta" ? " · PRIORIDADE ALTA" : ""), body: `${d.titulo}\nEntrega: ${fmtPrazo(d.prazo)}`, tag: "t" + t.id });
   res.json({ id: t.id });
 }));
 app.patch("/api/tarefas/:id", gestor, w(async (req, res) => {
@@ -140,7 +166,9 @@ app.patch("/api/tarefas/:id", gestor, w(async (req, res) => {
   const r = await q("UPDATE tarefas SET descricao=$1,detalhes=$2,prazo=$3,prioridade=$4 WHERE id=$5 RETURNING id", [d.titulo, d.detalhes, d.prazo, d.prioridade, req.params.id]);
   if (!r.length) return res.status(404).json({ erro: "Tarefa não encontrada." });
   await q("DELETE FROM tarefa_pessoas WHERE tarefa_id=$1 AND NOT (func_id = ANY($2::int[]))", [req.params.id, d.pessoas]);
-  await q("INSERT INTO tarefa_pessoas(tarefa_id,func_id) SELECT $1, unnest($2::int[]) ON CONFLICT DO NOTHING", [req.params.id, d.pessoas]);
+  await q("UPDATE tarefa_pessoas SET avisado_prazo=NULL WHERE tarefa_id=$1", [req.params.id]);
+  const novos = await q("INSERT INTO tarefa_pessoas(tarefa_id,func_id) SELECT $1, unnest($2::int[]) ON CONFLICT DO NOTHING RETURNING func_id", [req.params.id, d.pessoas]);
+  if (novos.length) avisoSeguro({ func: novos.map(r => r.func_id) }, { title: "Tarefa nova", body: `${d.titulo}\nEntrega: ${fmtPrazo(d.prazo)}`, tag: "t" + req.params.id });
   res.json({ ok: 1 });
 }));
 app.delete("/api/tarefas/:id", gestor, w(async (req, res) => { await q("DELETE FROM tarefas WHERE id=$1", [req.params.id]); res.json({ ok: 1 }); }));
@@ -167,7 +195,11 @@ app.post("/api/tarefas/:id/iniciar", w(async (req, res) => {
 const terminar = w(async (req, res) => {
   const t = await minhaTarefa(req, res); if (!t || !soColaborador(req, res)) return;
   if (!t.eu.inicio) return res.status(400).json({ erro: "Aperte \"Iniciar\" antes de terminar." });
-  await q("UPDATE tarefa_pessoas SET fim=COALESCE(fim,$1) WHERE tarefa_id=$2 AND func_id=$3", [Date.now(), t.id, req.eu.id]); res.json({ ok: 1 });
+  if (!(await q("SELECT 1 FROM anexos WHERE tarefa_id=$1 AND autor_id=$2 AND conclusao=true", [t.id, req.eu.id])).length)
+    return res.status(400).json({ erro: "Tire a foto do trabalho pronto para terminar." });
+  const r = await q("UPDATE tarefa_pessoas SET fim=COALESCE(fim,$1) WHERE tarefa_id=$2 AND func_id=$3 AND fim IS NULL RETURNING fim", [Date.now(), t.id, req.eu.id]);
+  if (r.length) avisoSeguro({ gestor: true }, { title: `✔ ${req.eu.nome} terminou`, body: t.descricao, tag: "f" + t.id + "-" + req.eu.id });
+  res.json({ ok: 1 });
 });
 app.post("/api/tarefas/:id/terminar", terminar);
 app.post("/api/tarefas/:id/finalizar", terminar);
@@ -211,8 +243,10 @@ app.post("/api/tarefas/:id/anexos", express.raw({ type: () => true, limit: "12mb
   const nome = (decodeURIComponent(req.get("x-nome") || "arquivo")).slice(0, 120);
   const [{ total }] = await q("SELECT COALESCE(SUM(tamanho),0)::bigint AS total FROM anexos");
   if (Number(total) + req.body.length > 800 * 1024 * 1024) return res.status(400).json({ erro: "Espaço de anexos cheio. Apague anexos antigos." });
-  await q("INSERT INTO anexos(tarefa_id,nome,tipo,tamanho,dados,em,autor_id) VALUES($1,$2,$3,$4,$5,$6,$7)",
-    [t.id, nome, tipo, req.body.length, req.body, Date.now(), req.eu.tipo === "func" ? req.eu.id : null]);
+  const conclusao = req.get("x-conclusao") === "1" && req.eu.tipo === "func" && tipo.startsWith("image/");
+  if (req.get("x-conclusao") === "1" && !conclusao) return res.status(400).json({ erro: "A foto de conclusão precisa ser uma foto (JPG ou PNG)." });
+  await q("INSERT INTO anexos(tarefa_id,nome,tipo,tamanho,dados,em,autor_id,conclusao) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+    [t.id, nome, tipo, req.body.length, req.body, Date.now(), req.eu.tipo === "func" ? req.eu.id : null, conclusao]);
   res.json({ ok: 1 });
 }));
 app.get("/api/anexos/:id", w(async (req, res) => {
@@ -227,9 +261,42 @@ app.get("/api/anexos/:id", w(async (req, res) => {
 }));
 app.delete("/api/anexos/:id", gestor, w(async (req, res) => { await q("DELETE FROM anexos WHERE id=$1", [req.params.id]); res.json({ ok: 1 }); }));
 
+// Modelos de tarefa
+app.delete("/api/modelos/:id", gestor, w(async (req, res) => { await q("DELETE FROM modelos WHERE id=$1", [req.params.id]); res.json({ ok: 1 }); }));
+
+// Avisos no celular
+app.get("/api/push/chave", (req, res) => res.json({ chave: VAPID.publicKey }));
+app.post("/api/push/assinar", w(async (req, res) => {
+  const s = req.body && req.body.endpoint && req.body.keys ? req.body : null;
+  if (!s || !/^https:\/\//.test(s.endpoint)) return res.status(400).json({ erro: "Assinatura inválida." });
+  const G = req.eu.tipo === "gestor";
+  await q(`INSERT INTO push(endpoint,func_id,gestor,dados,criado) VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(endpoint) DO UPDATE SET func_id=$2, gestor=$3, dados=$4`, [s.endpoint, G ? null : req.eu.id, G, JSON.stringify(s), Date.now()]);
+  res.json({ ok: 1 });
+}));
+app.post("/api/push/teste", w(async (req, res) => {
+  await avisarCelular(req.eu.tipo === "gestor" ? { gestor: true } : { func: [req.eu.id] }, { title: "Avisos ligados ✔", body: "Você vai receber as tarefas novas aqui no celular.", tag: "teste" });
+  res.json({ ok: 1 });
+}));
+
+// Prazo chegando: avisa 1 hora antes quem ainda não terminou
+const fmtPrazo = p => { if (!p) return "sem prazo"; const [dt, hr] = p.split("T"); const [y, m, d] = dt.split("-"); return `${d}/${m}` + (hr ? ` às ${hr}` : ""); };
+const agoraSP = (ms = Date.now()) => new Date(ms).toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 16).replace(" ", "T");
+async function verificarPrazos() {
+  const agora = agoraSP(), daqui1h = agoraSP(Date.now() + 3600e3);
+  const rows = await q(`SELECT tp.tarefa_id, tp.func_id, t.descricao, t.prazo FROM tarefa_pessoas tp JOIN tarefas t ON t.id=tp.tarefa_id
+    WHERE tp.fim IS NULL AND tp.avisado_prazo IS NULL AND t.prazo LIKE '%T%' AND t.prazo > $1 AND t.prazo <= $2`, [agora, daqui1h]);
+  for (const r of rows) {
+    await q("UPDATE tarefa_pessoas SET avisado_prazo=$1 WHERE tarefa_id=$2 AND func_id=$3", [Date.now(), r.tarefa_id, r.func_id]);
+    await avisarCelular({ func: [r.func_id] }, { title: "⏰ Prazo em menos de 1 hora", body: `${r.descricao}\nEntrega: ${fmtPrazo(r.prazo)}. Não esqueça de apertar TERMINAR.`, tag: "p" + r.tarefa_id });
+  }
+}
+
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ erro: "Erro no servidor. Tente de novo." }); });
 
 migrar().then(() => {
   const port = process.env.PORT || 3000;
   app.listen(port, () => console.log("Natal Osasco no ar na porta " + port));
+  setInterval(() => verificarPrazos().catch(e => console.error("prazos", e.message)), 5 * 60 * 1000);
+  verificarPrazos().catch(e => console.error("prazos", e.message));
 }).catch(e => { console.error(e); process.exit(1); });

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#1d5a3a">
+<meta name="theme-color" content="#0f5132">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Natal Osasco">
 <link rel="manifest" href="/manifest.json">
@@ -14,23 +14,26 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@400;500;600&display=swap">
 <style>
 :root{
-  --bg:#f3f5f1; --surface:#ffffff; --surface2:#e9eee6; --fg:#16231b; --muted:#5b6b60; --line:#d5ddd2;
-  --pine:#1d5a3a; --pine-fg:#ffffff; --gold:#b07d12; --gold-bg:#fbf1d9;
-  --ok:#1f7a45; --ok-bg:#ddf1e4; --run:#1d5fa8; --run-bg:#dde9f7; --late:#b3261e; --late-bg:#fbe1de;
+  --bg:#f8f4ec; --surface:#fffdf9; --surface2:#f2ece0; --fg:#1d1a16; --muted:#6a6155; --line:#e4dbcc;
+  --pine:#0f5132; --pine-fg:#ffffff; --gold:#a87a0c; --gold-bg:#fbf0d4; --red:#b3202a; --red-fg:#ffffff; --snow:rgba(255,255,255,.16);
+  --ok:#1f7a45; --ok-bg:#ddf1e4; --run:#1d5fa8; --run-bg:#dde9f7; --late:#b3202a; --late-bg:#fbe1de;
   --display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
   --body:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; --r:14px;
 }
 @media (prefers-color-scheme: dark){:root{
-  --bg:#0f1712; --surface:#17221b; --surface2:#1f2c23; --fg:#e8efe9; --muted:#9db0a2; --line:#2c3b31;
-  --pine:#3f9a68; --pine-fg:#06120b; --gold:#e3b54a; --gold-bg:#2e2611;
+  --bg:#10150f; --surface:#181f17; --surface2:#20291f; --fg:#eef0ea; --muted:#a8b3a2; --line:#2e392c;
+  --pine:#2f8a5a; --pine-fg:#06120b; --gold:#e3b54a; --gold-bg:#2e2611; --red:#e0636b; --red-fg:#1a0607; --snow:rgba(255,255,255,.10);
   --ok:#5cc98a; --ok-bg:#163525; --run:#79aef0; --run-bg:#172a42; --late:#f2867c; --late-bg:#3a1916; color-scheme:dark}}
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.45;-webkit-tap-highlight-color:transparent}
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--pine)}
 .wrap{max-width:720px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 110px}
-header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--pine);color:var(--pine-fg);
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;color:var(--pine-fg);
+  background:radial-gradient(circle at 12% 30%,var(--snow) 0 2px,transparent 3px),radial-gradient(circle at 63% 18%,var(--snow) 0 1.5px,transparent 2.5px),radial-gradient(circle at 85% 70%,var(--snow) 0 2px,transparent 3px),radial-gradient(circle at 38% 80%,var(--snow) 0 1.5px,transparent 2.5px),var(--pine);
+  background-size:140px 90px,170px 110px,130px 100px,160px 120px,auto;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:14px 12px}
+header.top::after{content:"";position:absolute;left:0;right:0;bottom:-6px;height:6px;background:repeating-linear-gradient(-45deg,var(--red) 0 10px,#fff 10px 20px,var(--gold) 20px 30px,#fff 30px 40px)}
 .top-in{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
 .brand{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .brand .logo{height:40px;width:auto;flex:none}
@@ -44,6 +47,7 @@ header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background
 button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:10px;padding:8px 12px;min-height:42px}
 button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
 button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+nav.tabs:first-of-type button.on{background:var(--red);border-color:var(--red);color:var(--red-fg)}
 button.primary{background:var(--pine);color:var(--pine-fg);border-color:var(--pine);font-weight:600}
 button.ghost{background:transparent;border-color:transparent;color:var(--muted);padding:6px 8px;min-height:36px}
 button.danger{color:var(--late)}
@@ -157,16 +161,34 @@ a.zap.sm{min-height:36px;padding:4px 10px;font-size:.85rem}
 .arqs{display:flex;flex-wrap:wrap;gap:6px} .arqs .pill{text-transform:none;letter-spacing:0;display:inline-flex;align-items:center;gap:4px;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .arqs .pill button{min-height:28px;padding:0 6px}
 .ok-panel{border:2px solid var(--ok)} .wz-t{font-family:var(--display);margin:0;color:var(--ok)}
+.modelos{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.modelo{display:flex;gap:6px;align-items:stretch}
+.modelo > button:first-child{flex:1;text-align:left;border:2px solid var(--gold);background:var(--gold-bg);font-weight:600;min-height:52px}
+.modelo small{display:block;font-weight:400;font-size:.78rem;color:var(--muted)}
+label.check{display:flex;align-items:center;gap:10px;font-weight:600;padding:6px 0;cursor:pointer}
+label.check input{width:22px;height:22px;flex:none;accent-color:var(--pine)}
+.alerta{margin-top:12px;padding:12px 14px;border-radius:var(--r);background:var(--late-bg);border:2px solid var(--late);display:flex;flex-direction:column;gap:6px}
+.alerta.curto{flex-direction:row;align-items:center;justify-content:space-between;width:100%;text-align:left;min-height:52px}
+.alerta.curto small{color:var(--late);font-weight:600;white-space:nowrap}
+.alerta .al-t{color:var(--late);font-family:var(--display);font-size:1.1rem}
+.alerta .h3{color:var(--late);margin-top:4px}
+.al-item{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:2px;background:var(--surface);border-color:var(--late);width:100%}
+.al-item span{overflow-wrap:anywhere} .al-item small{color:var(--late);font-size:.8rem}
+.push{margin-top:12px;padding:10px 12px;border-radius:var(--r);border:1px dashed var(--pine);display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.push span{flex:1 1 200px;font-size:.92rem}
+.push-n{margin-top:12px}
+.foto-fim img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:2px solid var(--ok);display:block}
 .welcome h2{font-family:var(--display);font-size:1.6rem;margin:24px 0 4px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
 <header class="top"><div class="top-in">
-  <div class="brand"><img class="logo" src="/logo-mij.png" alt="Grupo MIJ" width="52" height="40"><h1><small>Decoração de Natal</small>Osasco · Tarefas</h1><button class="role" id="role" data-act="sair" hidden></button></div>
+  <div class="brand"><img class="logo" src="/logo-mij.png" alt="Grupo MIJ" width="52" height="40"><h1><small>🎄 Decoração de Natal</small>Osasco · Tarefas</h1><button class="role" id="role" data-act="sair" hidden></button></div>
   <div class="stats" id="stats"></div>
 </div></header>
 <main class="wrap" id="app"><div class="empty">Carregando…</div></main>
+<input type="file" id="foto-fim" accept="image/*" capture="environment" hidden aria-hidden="true" tabindex="-1">
 <script src="/app.js"></script>
 </body>
 </html>
