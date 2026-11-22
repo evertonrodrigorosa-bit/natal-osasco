@@ -57,7 +57,9 @@ async function migrar() {
   CREATE TABLE IF NOT EXISTS seg_fotos(id SERIAL PRIMARY KEY, turno_id INT NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     tipo TEXT NOT NULL, rodada INT NOT NULL DEFAULT 0, local INT NOT NULL DEFAULT 0, mime TEXT NOT NULL, tamanho INT NOT NULL, dados BYTEA NOT NULL, em BIGINT NOT NULL);
   CREATE INDEX IF NOT EXISTS seg_fotos_turno ON seg_fotos(turno_id);
-  ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS gestor BOOLEAN NOT NULL DEFAULT false;`);
+  ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS gestor BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS locais TEXT;
+  ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS local_nome TEXT;`);
   // Pedido do Bruce em 2026-11-22: Helena entra como gestora pelo celular (feito uma vez só)
   if (!(await q("SELECT 1 FROM config WHERE chave='seed_helena'")).length) {
     await q(`INSERT INTO funcionarios(nome,telefone,token,criado,gestor) VALUES('Helena','11973667211',$1,$2,true)
@@ -89,6 +91,9 @@ const app = express();
 app.use(express.json({ limit: "100kb" }));
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
+// Usado pelo "despertador" do GitHub para o servidor grátis não dormir
+app.get("/ping", (req, res) => res.type("text").send("ok"));
+
 // Público: entrada do funcionário pelo celular
 const fone = v => { let d = String(v || "").replace(/\D/g, ""); if (d.length > 11 && d.startsWith("55")) d = d.slice(2); return d.length === 10 || d.length === 11 ? d : null; };
 app.post("/api/entrar", async (req, res, next) => {
@@ -110,9 +115,9 @@ app.use("/api", async (req, res, next) => {
   try {
     const k = req.get("x-chave") || (req.method === "GET" && typeof req.query.k === "string" ? req.query.k : "");
     if (k && SENHAS.some(x => igual(k, x))) { req.eu = { tipo: "gestor" }; return next(); }
-    if (k) { const [f] = await q("SELECT id,nome,seguranca,gestor,turno,turno_ini,turno_fim FROM funcionarios WHERE token=$1", [k]);
+    if (k) { const [f] = await q("SELECT id,nome,seguranca,gestor,turno,turno_ini,turno_fim,locais FROM funcionarios WHERE token=$1", [k]);
       if (f && f.gestor) { req.eu = { tipo: "gestor", nome: f.nome, gid: f.id }; return next(); }
-      if (f) { req.eu = { tipo: "func", id: f.id, nome: f.nome, seguranca: f.seguranca, turno: f.turno, turno_ini: f.turno_ini, turno_fim: f.turno_fim }; return next(); } }
+      if (f) { req.eu = { tipo: "func", id: f.id, nome: f.nome, seguranca: f.seguranca, turno: f.turno, turno_ini: f.turno_ini, turno_fim: f.turno_fim, locais: f.locais }; return next(); } }
     res.status(401).json({ erro: "Acesso expirado. Digite o seu celular para entrar de novo." });
   } catch (e) { next(e); }
 });
@@ -148,13 +153,18 @@ app.get("/api/estado", w(async (req, res) => {
 const LOCAIS_PADRAO = ["Local 1", "Local 2", "Local 3"];
 const HORA = 3600e3;
 const horaOk = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || "")) ? v : null;
+// Cada segurança tem a sua lista de locais; a cada ronda o app pega 3 seguidos, alternando pela lista
+const listaLocais = (txt, padrao) => { try { const l = JSON.parse(txt || "null"); if (Array.isArray(l) && l.length >= 3) return l; } catch (e) {} return padrao; };
+const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
 async function locais() { const [r] = await q("SELECT valor FROM config WHERE chave='locais_seg'"); return r ? JSON.parse(r.valor) : LOCAIS_PADRAO; }
 async function dadosSeg(soFunc) {
   const desde = Date.now() - 3 * 24 * HORA;
-  const guardas = await q(`SELECT id,nome,telefone,turno,turno_ini,turno_fim FROM funcionarios WHERE seguranca ${soFunc ? "AND id=$1" : ""} ORDER BY nome`, soFunc ? [soFunc] : []);
+  const guardas = await q(`SELECT id,nome,telefone,turno,turno_ini,turno_fim,locais FROM funcionarios WHERE seguranca ${soFunc ? "AND id=$1" : ""} ORDER BY nome`, soFunc ? [soFunc] : []);
   const ids = guardas.map(g => g.id);
   const turnos = await q("SELECT * FROM turnos WHERE func_id = ANY($1) AND (fim IS NULL OR inicio > $2) ORDER BY inicio DESC", [ids, soFunc ? Date.now() - 24 * HORA : desde]);
-  const fotos = await q("SELECT id,turno_id,tipo,rodada,local,em FROM seg_fotos WHERE turno_id = ANY($1) ORDER BY em", [turnos.map(t => t.id)]);
+  const padrao = await locais();
+  guardas.forEach(g => { g.locais = listaLocais(g.locais, padrao); });
+  const fotos = await q("SELECT id,turno_id,tipo,rodada,local,local_nome,em FROM seg_fotos WHERE turno_id = ANY($1) ORDER BY em", [turnos.map(t => t.id)]);
   return { guardas, turnos, fotos, locais: await locais(), agora: Date.now() };
 }
 const turnoAberto = async fid => (await q("SELECT * FROM turnos WHERE func_id=$1 AND fim IS NULL ORDER BY inicio DESC LIMIT 1", [fid]))[0];
@@ -178,7 +188,8 @@ app.post("/api/seg/foto", express.raw({ type: () => true, limit: "8mb" }), w(asy
     if (rodada < 1) return res.status(400).json({ erro: "A primeira ronda é 1 hora depois da chegada." });
     if (![0, 1, 2].includes(local)) return res.status(400).json({ erro: "Local inválido." });
     await q("DELETE FROM seg_fotos WHERE turno_id=$1 AND tipo='ronda' AND rodada=$2 AND local=$3", [t.id, rodada, local]);
-    await q("INSERT INTO seg_fotos(turno_id,tipo,rodada,local,mime,tamanho,dados,em) VALUES($1,'ronda',$2,$3,$4,$5,$6,$7)", [t.id, rodada, local, mime, req.body.length, req.body, agora]);
+    const nomeLocal = locaisDaRonda(listaLocais(req.eu.locais, await locais()), rodada)[local];
+    await q("INSERT INTO seg_fotos(turno_id,tipo,rodada,local,local_nome,mime,tamanho,dados,em) VALUES($1,'ronda',$2,$3,$4,$5,$6,$7,$8)", [t.id, rodada, local, nomeLocal, mime, req.body.length, req.body, agora]);
     return res.json({ ok: 1 });
   }
   if (tipo === "saida") {
@@ -201,11 +212,13 @@ app.post("/api/seg/guardas", gestor, w(async (req, res) => {
   const turno = req.body.turno === "noite" ? "noite" : "dia", ini = horaOk(req.body.turno_ini), fim = horaOk(req.body.turno_fim);
   if (!ini || !fim) return res.status(400).json({ erro: "Informe o horário do turno (entrada e saída)." });
   const id = Number(req.body.id) || null;
+  const ls = [...new Set((Array.isArray(req.body.locais) ? req.body.locais : []).map(x => String(x || "").trim().slice(0, 40)).filter(Boolean))].slice(0, 30);
+  if (ls.length < 3) return res.status(400).json({ erro: "Coloque pelo menos 3 locais de ronda (um por linha)." });
   if ((await q("SELECT 1 FROM funcionarios WHERE telefone=$1 AND id IS DISTINCT FROM $2", [tel, id])).length) return res.status(400).json({ erro: "Esse celular já está cadastrado." });
   if ((await q("SELECT 1 FROM funcionarios WHERE lower(nome)=lower($1) AND id IS DISTINCT FROM $2", [nome, id])).length) return res.status(400).json({ erro: "Já existe alguém com esse nome." });
-  if (id) await q("UPDATE funcionarios SET nome=$1,telefone=$2,turno=$3,turno_ini=$4,turno_fim=$5,token=CASE WHEN telefone IS DISTINCT FROM $2 THEN $7 ELSE token END WHERE id=$6 AND seguranca",
-    [nome, tel, turno, ini, fim, id, novoToken()]);
-  else await q("INSERT INTO funcionarios(nome,telefone,token,criado,seguranca,turno,turno_ini,turno_fim) VALUES($1,$2,$3,$4,true,$5,$6,$7)", [nome, tel, novoToken(), Date.now(), turno, ini, fim]);
+  if (id) await q("UPDATE funcionarios SET nome=$1,telefone=$2,turno=$3,turno_ini=$4,turno_fim=$5,locais=$8,token=CASE WHEN telefone IS DISTINCT FROM $2 THEN $7 ELSE token END WHERE id=$6 AND seguranca",
+    [nome, tel, turno, ini, fim, id, novoToken(), JSON.stringify(ls)]);
+  else await q("INSERT INTO funcionarios(nome,telefone,token,criado,seguranca,turno,turno_ini,turno_fim,locais) VALUES($1,$2,$3,$4,true,$5,$6,$7,$8)", [nome, tel, novoToken(), Date.now(), turno, ini, fim, JSON.stringify(ls)]);
   res.json({ ok: 1 });
 }));
 app.post("/api/seg/locais", gestor, w(async (req, res) => {
@@ -219,12 +232,12 @@ app.post("/api/seg/turnos/:id/encerrar", gestor, w(async (req, res) => {
 }));
 // Alarme de hora em hora (aviso no celular do segurança)
 async function verificarRondas() {
-  const abertos = await q("SELECT t.*, f.nome FROM turnos t JOIN funcionarios f ON f.id=t.func_id WHERE t.fim IS NULL");
+  const abertos = await q("SELECT t.*, f.nome, f.locais FROM turnos t JOIN funcionarios f ON f.id=t.func_id WHERE t.fim IS NULL");
   for (const t of abertos) {
     const rodada = Math.floor((Date.now() - Number(t.inicio)) / HORA);
     if (rodada >= 1 && rodada > t.ronda_avisada && rodada <= 24) {
       await q("UPDATE turnos SET ronda_avisada=$1 WHERE id=$2", [rodada, t.id]);
-      const nomes = (await locais()).join(", ");
+      const nomes = locaisDaRonda(listaLocais(t.locais, await locais()), rodada).join(", ");
       await avisarCelular({ func: [t.func_id] }, { title: "🔔 Hora da ronda!", body: `Abra o app e fotografe: ${nomes}.`, tag: "ronda" + t.id, alarme: true });
     }
   }

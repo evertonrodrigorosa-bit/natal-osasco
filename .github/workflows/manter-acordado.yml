@@ -1,0 +1,14 @@
+# Mantém o site acordado: o plano grátis do Render dorme após 15 minutos sem acesso,
+# e dormindo ele não manda o alarme da ronda nem o aviso de prazo.
+name: Manter o site acordado
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Acessar o site
+        run: curl -fsS --retry 3 --retry-delay 20 --max-time 90 https://natal-osasco.onrender.com/ping

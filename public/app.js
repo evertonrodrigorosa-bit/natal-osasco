@@ -403,15 +403,17 @@ function prazoRapido(t) {
 const HORA = 3600e3;
 const hhmm = ms => fmtH(ms);
 const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>`; };
+const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
+const listaDe = fid => { const g = S.d.seg.guardas.find(x => x.id === fid); return g && g.locais && g.locais.length >= 3 ? g.locais : S.d.seg.locais; };
 function infoTurno(t, fotos) {
   const fim = t.fim ? Number(t.fim) : Date.now(), ini = Number(t.inicio);
   const total = Math.floor((fim - ini) / HORA), fs = fotos.filter(f => f.turno_id === t.id);
   const rondas = [];
-  for (let r = 1; r <= total; r++) rondas.push({ r, hora: ini + r * HORA, fotos: [0, 1, 2].map(l => fs.find(f => f.tipo === "ronda" && f.rodada === r && f.local === l)) });
+  for (let r = 1; r <= total; r++) rondas.push({ r, hora: ini + r * HORA, nomes: locaisDaRonda(listaDe(t.func_id), r), fotos: [0, 1, 2].map(l => fs.find(f => f.tipo === "ronda" && f.rodada === r && f.local === l)) });
   return { ini, total, rondas, entrada: fs.find(f => f.tipo === "entrada"), saida: fs.find(f => f.tipo === "saida"), completas: rondas.filter(x => x.fotos.every(Boolean)).length };
 }
 function segGuarda() {
-  const sg = S.d.seg, t = sg.turnos.find(x => !x.fim), L = sg.locais;
+  const sg = S.d.seg, t = sg.turnos.find(x => !x.fim), L = locaisDaRonda(listaDe(S.d.eu.id), t ? Math.floor((Date.now() - Number(t.inicio)) / HORA) : 1);
   let h = `<div class="seg-nome ${t ? "on" : "off"}"><b>${esc(S.d.eu.nome)}</b><span>${t ? "🟢 Em serviço desde " + hhmm(t.inicio) : "🔴 Fora de serviço"}</span></div>`;
   if (!t) {
     h += `<div class="panel"><p style="margin:0">Chegou no local? Tire uma <b>foto do seu rosto</b> para começar o turno. Seu nome fica verde para o gestor.</p>
@@ -423,11 +425,11 @@ function segGuarda() {
   else {
     const at = it.rondas[r - 1], feita = at.fotos.every(Boolean);
     h += `<div class="panel ronda ${feita ? "ok" : "pend"}"><p class="h3">Ronda das ${hhmm(at.hora)}</p>${feita ? `<p class="ok-txt" style="margin:0">✔ Ronda completa. A próxima é às ${hhmm(at.hora + HORA)}.</p>` : `<p style="margin:0"><b>Fotografe os 3 locais agora.</b></p>`}
-      <div class="locais">${L.map((nome, l) => at.fotos[l] ? `<div class="loc ok">✔ ${esc(nome)}<small>${hhmm(at.fotos[l].em)}</small></div>` : `<button class="primary loc" data-act="seg-foto" data-k="ronda" data-id="${l}">📸 ${esc(nome)}</button>`).join("")}</div></div>`;
+      <div class="locais">${at.nomes.map((nome, l) => at.fotos[l] ? `<div class="loc ok">✔ ${esc(at.fotos[l].local_nome || nome)}<small>${hhmm(at.fotos[l].em)}</small></div>` : `<button class="primary loc" data-act="seg-foto" data-k="ronda" data-id="${l}">📸 ${esc(nome)}</button>`).join("")}</div></div>`;
     const faltaram = it.rondas.slice(0, -1).filter(x => !x.fotos.every(Boolean)).length;
     h += `<p class="note">Rondas completas neste turno: ${it.completas} de ${r}${faltaram ? ` · <span class="late-txt">${faltaram} incompleta${faltaram > 1 ? "s" : ""}</span>` : ""}.</p>`;
     if (!feita && S.alarmeVisto !== r) h += `<div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="al-t"><div class="modal-c alarme"><h2 id="al-t">🔔 Hora da ronda!</h2>
-      <p style="margin:0">Fotografe agora: <b>${esc(L.join(", "))}</b>.</p><button class="primary big" data-act="seg-alarme-ok">Vou fazer a ronda</button></div></div>`;
+      <p style="margin:0">Fotografe agora: <b>${esc(at.nomes.join(", "))}</b>.</p><button class="primary big" data-act="seg-alarme-ok">Vou fazer a ronda</button></div></div>`;
   }
   h += botaoPush();
   h += `<div class="panel" style="margin-top:22px"><p style="margin:0">Terminou o turno? Tire outra <b>foto do rosto</b>. Seu nome fica vermelho para o gestor.</p>
@@ -435,7 +437,7 @@ function segGuarda() {
   return h;
 }
 function segGestor() {
-  const sg = S.d.seg, L = sg.locais;
+  const sg = S.d.seg;
   let h = `<p class="note" style="margin-top:12px">🟢 em serviço · 🔴 saiu · ⚪ ainda não chegou. Toque no nome para ver as fotos.</p>`;
   for (const [k, titulo] of [["dia", "☀️ Turno do dia"], ["noite", "🌙 Turno da noite"]]) {
     const gs = sg.guardas.filter(g => (g.turno || "dia") === k);
@@ -450,7 +452,7 @@ function segGestor() {
         st = `🟢 Chegou ${hhmm(aberto.inicio)} · rondas ${it.completas}/${it.total}`; cls = "on";
         if (at && !at.fotos.every(Boolean) && Date.now() - at.hora > 10 * 60e3) st += ` · <span class="late-txt">⚠ ronda das ${hhmm(at.hora)} atrasada</span>`;
       } else if (ult) { st = `🔴 Saiu ${fmtDT(ult.fim)}`; cls = "off"; }
-      h += `<article class="task guarda ${cls}"><div class="task-h" data-act="seg-abrir" data-id="${g.id}"><div class="t"><div class="d">${esc(g.nome)}</div><div class="meta"><span>🕐 ${esc(g.turno_ini || "")}–${esc(g.turno_fim || "")}</span><span>${st}</span></div></div><span class="chev" aria-hidden="true">›</span></div>`;
+      h += `<article class="task guarda ${cls}"><div class="task-h" data-act="seg-abrir" data-id="${g.id}"><div class="t"><div class="d">${esc(g.nome)}</div><div class="meta"><span>🕐 ${esc(g.turno_ini || "")}–${esc(g.turno_fim || "")}</span><span>📍 ${(g.locais || []).length} locais</span><span>${st}</span></div></div><span class="chev" aria-hidden="true">›</span></div>`;
       if (S.segAberto === g.id) {
         h += `<div class="task-b">`;
         if (!ts.length) h += `<p class="note">Nenhum turno nos últimos 3 dias.</p>`;
@@ -458,7 +460,7 @@ function segGestor() {
           const it = infoTurno(t, sg.fotos);
           h += `<div class="turno"><p class="h3">Turno de ${fmtDT(t.inicio)}${t.fim ? " até " + fmtDT(t.fim) : " · em andamento"}</p>
             <div class="sf-row"><span class="sf-l">Chegada</span>${it.entrada ? fotoSeg(it.entrada, "Rosto na chegada") : `<span class="note">sem foto</span>`}</div>`;
-          it.rondas.forEach(x => h += `<div class="sf-row"><span class="sf-l">Ronda ${hhmm(x.hora)}</span>${x.fotos.map((f, l) => f ? fotoSeg(f, L[l]) : `<span class="sf falta">faltou<br>${esc(L[l])}</span>`).join("")}</div>`);
+          it.rondas.forEach(x => h += `<div class="sf-row"><span class="sf-l">Ronda ${hhmm(x.hora)}</span>${x.fotos.map((f, l) => f ? fotoSeg(f, f.local_nome || x.nomes[l]) : `<span class="sf falta">faltou<br>${esc(x.nomes[l])}</span>`).join("")}</div>`);
           if (t.fim) h += `<div class="sf-row"><span class="sf-l">Saída</span>${it.saida ? fotoSeg(it.saida, "Rosto na saída") : `<span class="note">encerrado pelo gestor, sem foto</span>`}</div>`;
           else h += `<div class="row">${confirmBtn("seg-encerrar", t.id, "Encerrar turno (esqueceu de sair)")}</div>`;
           h += `</div>`;
@@ -471,15 +473,15 @@ function segGestor() {
     h += `</div></section>`;
   }
   h += S.segEd === "novo" ? formGuarda(null) : `<button class="primary" style="margin-top:16px;width:100%" data-act="seg-novo">＋ Cadastrar segurança</button>`;
-  h += `<div class="panel" style="margin-top:16px"><div class="row" style="justify-content:space-between"><b>📍 Locais da ronda</b><button class="ghost" data-act="seg-locais">${S.segLocais ? "Fechar" : "Mudar"}</button></div>`;
-  h += S.segLocais ? `${L.map((n, i) => `<label class="f">Local ${i + 1}<input id="lc-${i}" maxlength="40" value="${esc(n)}"></label>`).join("")}<button class="primary" data-act="seg-locais-salvar">Salvar locais</button>` : `<p class="note" style="margin:0">${esc(L.join(" · "))}</p>`;
-  return h + `</div>`;
+  return h + `<p class="note" style="margin-top:12px">📍 Os locais da ronda são de cada segurança: toque no nome, depois em <b>Editar</b>. A cada ronda o app pede 3 locais e vai alternando pela lista.</p>`;
 }
 function formGuarda(g) {
   return `<div class="panel"><p class="h3">${g ? "Editar segurança" : "Novo segurança"}</p><div class="grid2"><label class="f">Nome<input id="sg-nome" maxlength="60" value="${esc(g ? g.nome : "")}" data-autofocus></label>
     <label class="f">Celular com DDD<input id="sg-tel" type="tel" inputmode="numeric" value="${esc(g ? fmtTel(g.telefone) : "")}" placeholder="11 98765-4321"></label></div>
     <div class="grid3"><label class="f">Turno<select id="sg-turno"><option value="dia" ${!g || g.turno !== "noite" ? "selected" : ""}>☀️ Dia</option><option value="noite" ${g && g.turno === "noite" ? "selected" : ""}>🌙 Noite</option></select></label>
     <label class="f">Entrada<input id="sg-ini" type="time" value="${esc(g ? g.turno_ini : "07:00")}"></label><label class="f">Saída<input id="sg-fim" type="time" value="${esc(g ? g.turno_fim : "19:00")}"></label></div>
+    <label class="f">Locais da ronda (um por linha, mínimo 3)<textarea id="sg-locais" rows="6" placeholder="Portão principal&#10;Árvore da praça&#10;Palco&#10;Estacionamento">${esc((g && g.locais ? g.locais : S.d.seg.locais).join("\n"))}</textarea></label>
+    <p class="note">A cada ronda o app pede 3 locais da lista, alternando. Ex.: com 6 locais, numa ronda são os 3 primeiros e na seguinte os outros 3.</p>
     <div class="row"><button class="primary" data-act="seg-salvar">Salvar</button><button data-act="seg-cancel">Cancelar</button></div></div>`;
 }
 // Alarme dentro do app (toca enquanto o app está aberto)
@@ -618,7 +620,7 @@ document.addEventListener("click", async ev => {
     case "seg-novo": S.segEd = "novo"; return draw();
     case "seg-ed": S.segEd = id; return draw();
     case "seg-cancel": S.segEd = null; return draw();
-    case "seg-salvar": { const body = { id: S.segEd === "novo" ? null : S.segEd, nome: val("sg-nome"), telefone: val("sg-tel"), turno: val("sg-turno"), turno_ini: val("sg-ini"), turno_fim: val("sg-fim") };
+    case "seg-salvar": { const body = { id: S.segEd === "novo" ? null : S.segEd, nome: val("sg-nome"), telefone: val("sg-tel"), turno: val("sg-turno"), turno_ini: val("sg-ini"), turno_fim: val("sg-fim"), locais: val("sg-locais").split("\n") };
       try { S.busy = true; await api("POST", "/api/seg/guardas", body); S.segEd = null; S.err = ""; } catch (e) { S.err = e.message; } S.busy = false; return carregar(); }
     case "seg-locais": S.segLocais = !S.segLocais; return draw();
     case "seg-locais-salvar": S.segLocais = false; return acao("POST", "/api/seg/locais", { locais: [val("lc-0"), val("lc-1"), val("lc-2")] });
