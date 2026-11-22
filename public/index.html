@@ -47,6 +47,7 @@ header.top::after{content:"";position:absolute;left:0;right:0;bottom:-6px;height
 button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:10px;padding:8px 12px;min-height:42px}
 button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
 button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+nav.tabs:first-of-type{flex-wrap:wrap;overflow:visible}
 nav.tabs:first-of-type button.on{background:var(--red);border-color:var(--red);color:var(--red-fg)}
 button.primary{background:var(--pine);color:var(--pine-fg);border-color:var(--pine);font-weight:600}
 button.ghost{background:transparent;border-color:transparent;color:var(--muted);padding:6px 8px;min-height:36px}
@@ -185,6 +186,25 @@ button.arq-btn{background:var(--gold-bg);border:2px solid var(--gold);color:var(
 .push span{flex:1 1 200px;font-size:.92rem}
 .push-n{margin-top:12px}
 .foto-fim img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:2px solid var(--ok);display:block}
+.seg-nome{margin-top:16px;padding:16px;border-radius:var(--r);display:flex;flex-direction:column;gap:2px;border:3px solid var(--line);background:var(--surface)}
+.seg-nome b{font-family:var(--display);font-size:1.6rem}
+.seg-nome.on{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)} .seg-nome.off{border-color:var(--late);background:var(--late-bg);color:var(--late)}
+.ronda.pend{border:2px solid var(--late)} .ronda.ok{border:2px solid var(--ok)}
+.locais{display:flex;flex-direction:column;gap:8px}
+.loc{min-height:56px;font-size:1.05rem;display:flex;align-items:center;justify-content:space-between;gap:8px}
+div.loc{padding:8px 14px;border-radius:10px;background:var(--ok-bg);color:var(--ok);font-weight:700}
+div.loc small{font-weight:500}
+.alarme{border:3px solid var(--late)} .alarme h2{color:var(--late)}
+.task.guarda.on{border-left:6px solid var(--ok)} .task.guarda.off{border-left:6px solid var(--late)} .task.guarda{border-left:6px solid var(--line)}
+.task.guarda.on .d{color:var(--ok)} .task.guarda.off .d{color:var(--late)}
+.turno{display:flex;flex-direction:column;gap:8px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.sf-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sf-l{width:96px;flex:none;font-size:.82rem;font-weight:600;color:var(--muted)}
+.sf{display:flex;flex-direction:column;align-items:center;gap:2px;text-decoration:none;color:var(--muted);font-size:.75rem;text-align:center}
+.sf img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block}
+.sf.falta{width:64px;height:64px;justify-content:center;border-radius:8px;border:2px dashed var(--late);color:var(--late);font-weight:600;font-size:.68rem;overflow:hidden}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media (max-width:460px){.grid3{grid-template-columns:1fr 1fr}.grid3 label:first-child{grid-column:1/-1}}
 .welcome h2{font-family:var(--display);font-size:1.6rem;margin:24px 0 4px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -195,6 +215,7 @@ button.arq-btn{background:var(--gold-bg);border:2px solid var(--gold);color:var(
   <div class="stats" id="stats"></div>
 </div></header>
 <main class="wrap" id="app"><div class="empty">Carregando…</div></main>
+<input type="file" id="foto-seg" accept="image/*" capture="user" hidden aria-hidden="true" tabindex="-1">
 <input type="file" id="foto-fim" accept="image/*" capture="environment" hidden aria-hidden="true" tabindex="-1">
 <script src="/app.js"></script>
 </body>
