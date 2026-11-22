@@ -408,7 +408,7 @@ function prazoRapido(t) {
 /* ---------- segurança ---------- */
 const HORA = 3600e3;
 const hhmm = ms => fmtH(ms);
-const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>`; };
+const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<span class="sf-w"><a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>${etiquetaLocal(f)}</span>`; };
 const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
 const listaDe = fid => { const g = S.d.seg.guardas.find(x => x.id === fid); return g && g.locais && g.locais.length >= 3 ? g.locais : S.d.seg.locais; };
 function infoTurno(t, fotos) {
@@ -458,6 +458,8 @@ function segGestor(ro) {
       if (aberto) {
         const it = infoTurno(aberto, sg.fotos), at = it.rondas[it.total - 1];
         st = `🟢 Chegou ${hhmm(aberto.inicio)} · rondas ${it.completas}/${it.total}`; cls = "on";
+        if (aberto.pos_em && sg.base) { const pp = { lat: aberto.pos_lat, lng: aberto.pos_lng, precisao: aberto.pos_prec };
+          st += foraDaBase(sg.base, pp) ? ` · <span class="late-txt">⚠ fora da praça (${fmtDist(distM(sg.base, pp))}) às ${hhmm(aberto.pos_em)}</span>` : ` · ✔ na praça às ${hhmm(aberto.pos_em)}`; }
         if (at && !at.fotos.every(Boolean) && Date.now() - at.hora > 10 * 60e3) st += ` · <span class="late-txt">⚠ ronda das ${hhmm(at.hora)} atrasada</span>`;
       } else if (ult) { st = `🔴 Saiu ${fmtDT(ult.fim)}`; cls = "off"; }
       h += `<article class="task guarda ${cls}"><div class="task-h" data-act="seg-abrir" data-id="${g.id}"><div class="t"><div class="d">${esc(g.nome)}</div><div class="meta"><span>🕐 ${esc(g.turno_ini || "")}–${esc(g.turno_fim || "")}</span><span>📍 ${(g.locais || []).length} locais</span><span>${st}</span></div></div><span class="chev" aria-hidden="true">›</span></div>`;
@@ -484,7 +486,33 @@ function segGestor(ro) {
   if (ro) return h;
   h += S.segEd === "novo" ? formGuarda(null) : `<button class="primary" style="margin-top:16px;width:100%" data-act="seg-novo">＋ Cadastrar segurança</button>`;
   h += `<p class="note" style="margin-top:12px">📍 Os locais da ronda são de cada segurança: toque no nome, depois em <b>Editar</b>. A cada ronda o app pede 3 locais e vai alternando pela lista.</p>`;
-  return h + configPanico();
+  return h + configBase() + configPanico();
+}
+
+/* ---------- local de trabalho (praça) ---------- */
+function pegarLocal(espera = 8000) {
+  return new Promise(res => { if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lng: p.coords.longitude, precisao: Math.round(p.coords.accuracy) }), () => res(null), { enableHighAccuracy: true, timeout: espera, maximumAge: 0 }); });
+}
+function distM(a, b) { const R = 6371e3, k = Math.PI / 180, dLat = (b.lat - a.lat) * k, dLng = (b.lng - a.lng) * k;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * k) * Math.cos(b.lat * k) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); }
+const fmtDist = m => m >= 1000 ? (m / 1000).toFixed(1).replace(".", ",") + " km" : Math.round(m) + " m";
+const foraDaBase = (b, p) => b && p && p.lat !== null && p.lat !== undefined ? distM(b, p) - Math.min(p.precisao || 0, 500) > b.raio : false;
+function etiquetaLocal(p) {
+  const b = S.d.seg && S.d.seg.base; if (!p || p.lat === null || p.lat === undefined) return "";
+  const u = `https://maps.google.com/?q=${p.lat},${p.lng}`;
+  if (!b) return `<a class="geo" href="${u}" target="_blank" rel="noopener">📍 mapa</a>`;
+  const d = distM(b, p); return foraDaBase(b, p) ? `<a class="geo fora" href="${u}" target="_blank" rel="noopener">⚠ ${fmtDist(d)} fora</a>` : `<a class="geo" href="${u}" target="_blank" rel="noopener">✔ na praça</a>`;
+}
+function configBase() {
+  const b = S.d.seg.base;
+  return `<section class="grupo"><div class="grupo-h"><h2>📍 Local de trabalho (praça)</h2></div><div class="panel">
+    ${b ? `<p style="margin:0">Definido: <a href="https://maps.google.com/?q=${b.lat},${b.lng}" target="_blank" rel="noopener">ver no mapa</a>, raio de <b>${fmtDist(b.raio)}</b>. Quando um segurança aparecer fora desse raio, os gestores recebem um aviso sem som.</p>`
+      : `<p style="margin:0">Ainda não definido. Defina o ponto da praça para o app avisar quando um segurança sair dela.</p>`}
+    <p class="note" style="margin:0">O app confere a posição em cada foto (chegada, rondas e saída) e a cada 3 minutos enquanto o app do segurança estiver aberto. Com o celular bloqueado e o app fechado, o celular não manda a localização.</p>
+    <div class="grid2"><label class="f">Raio em metros<input id="bs-raio" type="number" inputmode="numeric" min="50" max="20000" value="${b ? b.raio : 300}"></label>
+    <label class="f">Ou cole o link do Google Maps / coordenadas<input id="bs-link" placeholder="-23.53, -46.79"></label></div>
+    <div class="row"><button class="primary" data-act="base-aqui">📍 Estou na praça: usar minha localização</button><button data-act="base-link">Salvar pelo link</button>${b ? confirmBtn("base-tirar", 0, "Tirar") : ""}</div></div></section>`;
 }
 
 /* ---------- botão de pânico ---------- */
@@ -603,6 +631,14 @@ function checarAlarme() {
   if (feita) tocar(false);
 }
 setInterval(checarAlarme, 10000);
+// Enquanto o app do segurança está aberto, manda a posição a cada 3 minutos (para avisar se sair da praça)
+let ultimaPos = 0;
+async function enviarPosicao() {
+  if (!S.d || G() || !S.d.eu.seguranca || document.hidden || Date.now() - ultimaPos < 170e3) return;
+  if (!S.d.seg.turnos.some(x => !x.fim)) return;
+  ultimaPos = Date.now(); const g = await pegarLocal(); if (g) api("POST", "/api/seg/posicao", g).catch(() => {});
+}
+setInterval(enviarPosicao, 30000); document.addEventListener("visibilitychange", () => { if (!document.hidden) { ultimaPos = 0; enviarPosicao(); } });
 function fotoPequena(file) {
   return new Promise((res, rej) => {
     const img = new Image(), u = URL.createObjectURL(file);
@@ -727,6 +763,14 @@ document.addEventListener("click", async ev => {
     case "seg-locais": S.segLocais = !S.segLocais; return draw();
     case "seg-locais-salvar": S.segLocais = false; return acao("POST", "/api/seg/locais", { locais: [val("lc-0"), val("lc-1"), val("lc-2")] });
     case "seg-encerrar": return acao("POST", `/api/seg/turnos/${id}/encerrar`);
+    case "base-aqui": { b.disabled = true; b.textContent = "Pegando a localização…"; const g = await pegarLocal(15000);
+      if (!g) { S.err = "Não consegui pegar a sua localização. Ligue a Localização do celular e permita para este site."; return draw(); }
+      if (g.precisao > 150) S.err = `Atenção: a localização veio com margem de ±${g.precisao} m. Se possível, tente de novo ao ar livre.`;
+      return acao("POST", "/api/seg/base", { lat: g.lat, lng: g.lng, raio: val("bs-raio") }); }
+    case "base-link": { const t = val("bs-link"), m = t.match(/(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/);
+      if (!m) { S.err = "Não achei as coordenadas. No Google Maps, segure o dedo no ponto e copie os números (ex.: -23.53, -46.79)."; return draw(); }
+      return acao("POST", "/api/seg/base", { lat: m[1], lng: m[2], raio: val("bs-raio") }); }
+    case "base-tirar": return acao("POST", "/api/seg/base", { remover: true });
     case "atender": return acao("POST", `/api/panicos/${id}/atender`);
     case "teste-ok": return acao("POST", "/api/teste-alarme/ok");
     case "testar-alarme": try { const r = await api("POST", `/api/seg/centrais/${id}/testar`); S.err = r.celulares ? "" : "Teste criado, mas essa pessoa ainda não ativou os avisos no celular. Ela só vai ouvir com o app aberto. Peça para entrar e tocar em Ativar avisos."; } catch (e) { S.err = e.message; } return carregar();
@@ -807,8 +851,10 @@ document.addEventListener("change", async ev => {
     const f0 = ev.target.files[0]; ev.target.value = ""; if (!f0) return;
     S.busy = true; S.err = ""; S.enviandoFoto = 1; draw();
     try {
-      const f = await fotoPequena(f0);
-      const r = await fetch("/api/seg/foto", { method: "POST", headers: { "content-type": "image/jpeg", "x-chave": S.chave, "x-tipo": S.segTipo, "x-local": S.segLocal }, body: f });
+      const [f, g] = await Promise.all([fotoPequena(f0), pegarLocal()]);
+      const hd = { "content-type": "image/jpeg", "x-chave": S.chave, "x-tipo": S.segTipo, "x-local": S.segLocal };
+      if (g) Object.assign(hd, { "x-lat": String(g.lat), "x-lng": String(g.lng), "x-prec": String(g.precisao) });
+      const r = await fetch("/api/seg/foto", { method: "POST", headers: hd, body: f });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || "Falha ao enviar a foto.");
     } catch (e) { S.err = e.message; }
     S.busy = false; S.enviandoFoto = null; return carregar();

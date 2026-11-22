@@ -57,6 +57,14 @@ async function migrar() {
   CREATE TABLE IF NOT EXISTS seg_fotos(id SERIAL PRIMARY KEY, turno_id INT NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     tipo TEXT NOT NULL, rodada INT NOT NULL DEFAULT 0, local INT NOT NULL DEFAULT 0, mime TEXT NOT NULL, tamanho INT NOT NULL, dados BYTEA NOT NULL, em BIGINT NOT NULL);
   CREATE INDEX IF NOT EXISTS seg_fotos_turno ON seg_fotos(turno_id);
+  ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
+  ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
+  ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS precisao INT;
+  ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_lat DOUBLE PRECISION;
+  ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_lng DOUBLE PRECISION;
+  ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_prec INT;
+  ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_em BIGINT;
+  ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fora BOOLEAN NOT NULL DEFAULT false;
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS gestor BOOLEAN NOT NULL DEFAULT false;
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS locais TEXT;
   ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS local_nome TEXT;
@@ -196,9 +204,38 @@ async function dadosSeg(soFunc) {
   const turnos = await q("SELECT * FROM turnos WHERE func_id = ANY($1) AND (fim IS NULL OR inicio > $2) ORDER BY inicio DESC", [ids, soFunc ? Date.now() - 24 * HORA : desde]);
   const padrao = await locais();
   guardas.forEach(g => { g.locais = listaLocais(g.locais, padrao); });
-  const fotos = await q("SELECT id,turno_id,tipo,rodada,local,local_nome,em FROM seg_fotos WHERE turno_id = ANY($1) ORDER BY em", [turnos.map(t => t.id)]);
-  return { guardas, turnos, fotos, locais: await locais(), agora: Date.now() };
+  const fotos = await q("SELECT id,turno_id,tipo,rodada,local,local_nome,em,lat,lng,precisao FROM seg_fotos WHERE turno_id = ANY($1) ORDER BY em", [turnos.map(t => t.id)]);
+  return { guardas, turnos, fotos, locais: await locais(), base: await baseSeg(), agora: Date.now() };
 }
+// Local de trabalho dos seguranças (ponto + raio em metros), definido pelo gestor
+async function baseSeg() { const [r] = await q("SELECT valor FROM config WHERE chave='base_seg'"); return r ? JSON.parse(r.valor) : null; }
+function distM(a, b) { const R = 6371e3, k = Math.PI / 180, dLat = (b.lat - a.lat) * k, dLng = (b.lng - a.lng) * k;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * k) * Math.cos(b.lat * k) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); }
+const fmtDist = m => m >= 1000 ? (m / 1000).toFixed(1).replace(".", ",") + " km" : Math.round(m) + " m";
+app.post("/api/seg/base", gestor, w(async (req, res) => {
+  if (req.body.remover) { await q("DELETE FROM config WHERE chave='base_seg'"); return res.json({ ok: 1 }); }
+  const lat = Number(req.body.lat), lng = Number(req.body.lng), raio = Math.round(Number(req.body.raio));
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return res.status(400).json({ erro: "Não consegui pegar a localização. Ligue a localização do celular e tente de novo." });
+  if (!(raio >= 50 && raio <= 20000)) return res.status(400).json({ erro: "O raio precisa ser entre 50 e 20.000 metros." });
+  await q("INSERT INTO config(chave,valor) VALUES('base_seg',$1) ON CONFLICT(chave) DO UPDATE SET valor=$1", [JSON.stringify({ lat, lng, raio })]);
+  res.json({ ok: 1 });
+}));
+// Guarda a última posição do turno e avisa os gestores (sem som) quando o segurança SAI do raio
+async function registrarPosicao(eu, geo, onde) {
+  const t = await turnoAberto(eu.id); if (!t || geo.lat === null) return null;
+  const b = await baseSeg(); const d = b ? distM(b, geo) : null;
+  const fora = b ? d - Math.min(geo.precisao || 0, 500) > b.raio : false;
+  await q("UPDATE turnos SET pos_lat=$1,pos_lng=$2,pos_prec=$3,pos_em=$4,fora=$5 WHERE id=$6", [geo.lat, geo.lng, geo.precisao !== null ? Math.round(geo.precisao) : null, Date.now(), fora, t.id]);
+  if (fora && !t.fora) avisoSeguro({ gestor: true }, { title: `⚠ ${eu.nome} saiu da praça`, body: `${onde[0].toUpperCase() + onde.slice(1)}, ele estava a ${fmtDist(d)} do local de trabalho.`, tag: "longe" + t.id, silencioso: true });
+  if (!fora && t.fora) avisoSeguro({ gestor: true }, { title: `✅ ${eu.nome} voltou para a praça`, body: "Está de novo dentro do local de trabalho.", tag: "longe" + t.id, silencioso: true });
+  return { fora, d };
+}
+app.post("/api/seg/posicao", w(async (req, res) => {
+  if (req.eu.tipo !== "func" || !req.eu.seguranca) return res.status(403).json({ erro: "Só para seguranças." });
+  const lat = Number(req.body.lat), lng = Number(req.body.lng), prec = Number(req.body.precisao);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ erro: "Sem localização." });
+  res.json({ ok: 1, ...(await registrarPosicao(req.eu, { lat, lng, precisao: Number.isFinite(prec) ? prec : null }, "pelo app aberto")) });
+}));
 const turnoAberto = async fid => (await q("SELECT * FROM turnos WHERE func_id=$1 AND fim IS NULL ORDER BY inicio DESC LIMIT 1", [fid]))[0];
 // Foto do segurança: entrada (rosto), ronda (local 1..3) ou saída (rosto)
 app.post("/api/seg/foto", express.raw({ type: () => true, limit: "8mb" }), w(async (req, res) => {
@@ -206,11 +243,19 @@ app.post("/api/seg/foto", express.raw({ type: () => true, limit: "8mb" }), w(asy
   const mime = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase().replace("image/jpg", "image/jpeg");
   if (!/^image\/(jpeg|png|webp)$/.test(mime) || !req.body || !req.body.length) return res.status(400).json({ erro: "Envie uma foto (JPG ou PNG)." });
   const tipo = req.get("x-tipo"), agora = Date.now();
+  const num = v => v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null;
+  const geo = { lat: num(req.get("x-lat")), lng: num(req.get("x-lng")), precisao: num(req.get("x-prec")) };
+  if (geo.lat === null || geo.lng === null) geo.lat = geo.lng = geo.precisao = null;
+  const marcarGeo = async () => { if (geo.lat === null) return;
+    await q("UPDATE seg_fotos SET lat=$1,lng=$2,precisao=$3 WHERE id=(SELECT f.id FROM seg_fotos f JOIN turnos t ON t.id=f.turno_id WHERE t.func_id=$4 ORDER BY f.id DESC LIMIT 1)", [geo.lat, geo.lng, geo.precisao !== null ? Math.round(geo.precisao) : null, req.eu.id]);
+    await registrarPosicao(req.eu, geo, tipo === "ronda" ? "na foto da ronda" : tipo === "entrada" ? "na foto de chegada" : "na foto de saída");
+  };
   let t = await turnoAberto(req.eu.id);
   if (tipo === "entrada") {
     if (t) return res.status(400).json({ erro: "Seu turno já está aberto." });
     [t] = await q("INSERT INTO turnos(func_id,inicio) VALUES($1,$2) RETURNING *", [req.eu.id, agora]);
     await q("INSERT INTO seg_fotos(turno_id,tipo,mime,tamanho,dados,em) VALUES($1,'entrada',$2,$3,$4,$5)", [t.id, mime, req.body.length, req.body, agora]);
+    await marcarGeo();
     avisoSeguro({ gestor: true }, { title: `🟢 ${req.eu.nome} chegou`, body: "Turno de segurança iniciado. Toque para ver a foto.", tag: "seg" + t.id });
     return res.json({ ok: 1 });
   }
@@ -222,10 +267,12 @@ app.post("/api/seg/foto", express.raw({ type: () => true, limit: "8mb" }), w(asy
     await q("DELETE FROM seg_fotos WHERE turno_id=$1 AND tipo='ronda' AND rodada=$2 AND local=$3", [t.id, rodada, local]);
     const nomeLocal = locaisDaRonda(listaLocais(req.eu.locais, await locais()), rodada)[local];
     await q("INSERT INTO seg_fotos(turno_id,tipo,rodada,local,local_nome,mime,tamanho,dados,em) VALUES($1,'ronda',$2,$3,$4,$5,$6,$7,$8)", [t.id, rodada, local, nomeLocal, mime, req.body.length, req.body, agora]);
+    await marcarGeo();
     return res.json({ ok: 1 });
   }
   if (tipo === "saida") {
     await q("INSERT INTO seg_fotos(turno_id,tipo,mime,tamanho,dados,em) VALUES($1,'saida',$2,$3,$4,$5)", [t.id, mime, req.body.length, req.body, agora]);
+    await marcarGeo();
     await q("UPDATE turnos SET fim=$1 WHERE id=$2", [agora, t.id]);
     avisoSeguro({ gestor: true }, { title: `🔴 ${req.eu.nome} encerrou o turno`, body: "Toque para ver as fotos do turno.", tag: "seg" + t.id });
     return res.json({ ok: 1 });
