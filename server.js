@@ -56,7 +56,14 @@ async function migrar() {
   CREATE INDEX IF NOT EXISTS turnos_func ON turnos(func_id, inicio);
   CREATE TABLE IF NOT EXISTS seg_fotos(id SERIAL PRIMARY KEY, turno_id INT NOT NULL REFERENCES turnos(id) ON DELETE CASCADE,
     tipo TEXT NOT NULL, rodada INT NOT NULL DEFAULT 0, local INT NOT NULL DEFAULT 0, mime TEXT NOT NULL, tamanho INT NOT NULL, dados BYTEA NOT NULL, em BIGINT NOT NULL);
-  CREATE INDEX IF NOT EXISTS seg_fotos_turno ON seg_fotos(turno_id);`);
+  CREATE INDEX IF NOT EXISTS seg_fotos_turno ON seg_fotos(turno_id);
+  ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS gestor BOOLEAN NOT NULL DEFAULT false;`);
+  // Pedido do Bruce em 2026-11-22: Helena entra como gestora pelo celular (feito uma vez só)
+  if (!(await q("SELECT 1 FROM config WHERE chave='seed_helena'")).length) {
+    await q(`INSERT INTO funcionarios(nome,telefone,token,criado,gestor) VALUES('Helena','11973667211',$1,$2,true)
+      ON CONFLICT(telefone) DO UPDATE SET gestor=true, seguranca=false`, [crypto.randomBytes(12).toString("base64url"), Date.now()]);
+    await q("INSERT INTO config(chave,valor) VALUES('seed_helena','1') ON CONFLICT DO NOTHING");
+  }
   // Leva as tarefas antigas (um responsável) para o novo formato, uma vez só
   await q(`
   INSERT INTO tarefa_pessoas(tarefa_id,func_id,ciente,inicio,fim)
@@ -103,7 +110,8 @@ app.use("/api", async (req, res, next) => {
   try {
     const k = req.get("x-chave") || (req.method === "GET" && typeof req.query.k === "string" ? req.query.k : "");
     if (k && SENHAS.some(x => igual(k, x))) { req.eu = { tipo: "gestor" }; return next(); }
-    if (k) { const [f] = await q("SELECT id,nome,seguranca,turno,turno_ini,turno_fim FROM funcionarios WHERE token=$1", [k]);
+    if (k) { const [f] = await q("SELECT id,nome,seguranca,gestor,turno,turno_ini,turno_fim FROM funcionarios WHERE token=$1", [k]);
+      if (f && f.gestor) { req.eu = { tipo: "gestor", nome: f.nome, gid: f.id }; return next(); }
       if (f) { req.eu = { tipo: "func", id: f.id, nome: f.nome, seguranca: f.seguranca, turno: f.turno, turno_ini: f.turno_ini, turno_fim: f.turno_fim }; return next(); } }
     res.status(401).json({ erro: "Acesso expirado. Digite o seu celular para entrar de novo." });
   } catch (e) { next(e); }
@@ -119,10 +127,11 @@ app.get("/api/estado", w(async (req, res) => {
   if (req.eu.tipo === "gestor") {
     const [setores, tarefas, pessoas, obs, func, anexos] = await Promise.all([
       q("SELECT id,nome FROM setores"), q("SELECT * FROM tarefas ORDER BY id"), q("SELECT * FROM tarefa_pessoas"),
-      q("SELECT * FROM obs ORDER BY em"), q("SELECT id,nome,telefone FROM funcionarios WHERE NOT seguranca ORDER BY nome"),
+      q("SELECT * FROM obs ORDER BY em"), q("SELECT id,nome,telefone FROM funcionarios WHERE NOT seguranca AND NOT gestor ORDER BY nome"),
       q("SELECT id,tarefa_id,nome,tipo,tamanho,em,autor_id,conclusao FROM anexos ORDER BY id")]);
     const modelos = await q("SELECT * FROM modelos ORDER BY titulo");
-    return res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos, modelos, seg: await dadosSeg() });
+    const gestores = await q("SELECT id,nome,telefone FROM funcionarios WHERE gestor ORDER BY nome");
+    return res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos, modelos, seg: await dadosSeg(), gestores });
   }
   if (req.eu.seguranca) return res.json({ eu: req.eu, seg: await dadosSeg(req.eu.id) });
   // Colaborador: só as tarefas em que ele está (e os colegas dessas tarefas)
@@ -227,7 +236,7 @@ app.post("/api/funcionarios", gestor, w(async (req, res) => {
   const tel = fone(req.body.telefone); if (!tel) return res.status(400).json({ erro: "Informe o celular com DDD, ex.: 11 98765-4321." });
   if ((await q("SELECT 1 FROM funcionarios WHERE lower(nome)=lower($1)", [nome])).length) return res.status(400).json({ erro: "Já existe alguém com esse nome." });
   if ((await q("SELECT 1 FROM funcionarios WHERE telefone=$1", [tel])).length) return res.status(400).json({ erro: "Esse celular já está cadastrado." });
-  res.json((await q("INSERT INTO funcionarios(nome,telefone,token,criado) VALUES($1,$2,$3,$4) RETURNING id", [nome, tel, novoToken(), Date.now()]))[0]);
+  res.json((await q("INSERT INTO funcionarios(nome,telefone,token,criado,gestor) VALUES($1,$2,$3,$4,$5) RETURNING id", [nome, tel, novoToken(), Date.now(), !!req.body.gestor]))[0]);
 }));
 app.patch("/api/funcionarios/:id", gestor, w(async (req, res) => {
   const nome = txt(req.body.nome, 60); if (!nome) return res.status(400).json({ erro: "Informe o nome." });
@@ -236,6 +245,7 @@ app.patch("/api/funcionarios/:id", gestor, w(async (req, res) => {
   await q("UPDATE funcionarios SET nome=$1, telefone=$2, token=CASE WHEN telefone IS DISTINCT FROM $2 THEN $4 ELSE token END WHERE id=$3", [nome, tel, req.params.id, novoToken()]); res.json({ ok: 1 });
 }));
 app.delete("/api/funcionarios/:id", gestor, w(async (req, res) => {
+  if (req.eu.gid && Number(req.params.id) === req.eu.gid) return res.status(400).json({ erro: "Você não pode remover o seu próprio acesso." });
   await q("DELETE FROM funcionarios WHERE id=$1", [req.params.id]); res.json({ ok: 1 });
 }));
 

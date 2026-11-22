@@ -107,7 +107,7 @@ function drawInner() {
     if (S.chave && !S.d) { app.innerHTML = h + `<div class="empty">Carregando…</div>`; return; }
     app.innerHTML = h + entrada(); const f = app.querySelector("[data-autofocus]"); if (f) f.focus(); return;
   }
-  role.hidden = false; role.textContent = (G() ? "Gestor" : S.d.eu.nome) + " · Sair";
+  role.hidden = false; role.textContent = (G() ? S.d.eu.nome || "Gestor" : S.d.eu.nome) + " · Sair";
   if (!G() && S.d.eu.seguranca) { stats.innerHTML = `<span>🛡 Segurança · turno ${S.d.eu.turno === "noite" ? "da noite" : "do dia"} ${esc(S.d.eu.turno_ini || "")}–${esc(S.d.eu.turno_fim || "")}</span>`;
     app.innerHTML = h + segGuarda(); return; }
   const ts = ativas(), c = { pend: 0, run: 0, ok: 0, late: 0 };
@@ -264,6 +264,7 @@ function equipe() {
   const fs = S.d.funcionarios;
   let h = `<div class="panel"><p class="h3">Novo colaborador</p><div class="grid2"><label class="f">Nome<input id="nf-nome" maxlength="60" placeholder="Ex.: Caio"></label>
   <label class="f">Celular com DDD<input id="nf-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label></div>
+  <label class="check"><input type="checkbox" id="nf-gestor"> É gestor(a): cria tarefas e acompanha os seguranças</label>
   <button class="primary" data-act="nf-save">Adicionar à equipe</button>
   <p class="note">Depois mande o link do site para a pessoa. Ela entra digitando o celular e já cai direto na lista dela.</p></div>`;
   h += `<p class="h3" style="margin-top:18px">Equipe (${fs.length})</p><div class="team" style="margin-top:8px">`;
@@ -273,6 +274,10 @@ function equipe() {
     const n = S.d.pessoas.filter(p => p.func_id === f.id && !p.fim).length;
     h += `<div class="p"><span>${esc(f.nome)}<br><small class="note">${esc(fmtTel(f.telefone)) || "sem celular"} · ${n} em aberto</small></span>${f.telefone ? `<a class="zap" href="https://wa.me/55${f.telefone}?text=${encodeURIComponent("Olá " + f.nome + ", este é o app de tarefas da decoração de Natal: " + location.origin + " . Entre digitando o seu celular.")}" target="_blank" rel="noopener">Enviar link</a>` : ""}<button class="ghost" data-act="ef" data-id="${f.id}">Editar</button>${confirmBtn("del-func", f.id, "Remover")}</div>`;
   }
+  const gs = S.d.gestores || [];
+  h += `</div><p class="h3" style="margin-top:18px">Gestão que entra pelo celular (${gs.length})</p><div class="team" style="margin-top:8px">`;
+  if (!gs.length) h += `<p class="note">Ninguém além de quem entra com senha.</p>`;
+  for (const f of gs) h += `<div class="p"><span>👑 ${esc(f.nome)}<br><small class="note">${esc(fmtTel(f.telefone))} · entra digitando o celular</small></span>${f.telefone ? `<a class="zap" href="https://wa.me/55${f.telefone}?text=${encodeURIComponent("Olá " + f.nome + ", você tem acesso de gestão ao app da decoração de Natal: " + location.origin + " . Entre digitando o seu celular.")}" target="_blank" rel="noopener">Enviar link</a>` : ""}${f.id === S.d.eu.gid ? "" : confirmBtn("del-func", f.id, "Tirar acesso")}</div>`;
   return h + `</div><div class="panel" style="margin-top:18px"><p class="h3">Link para mandar à equipe</p><p style="margin:0;font-weight:600;overflow-wrap:anywhere">${esc(location.origin)}</p>
   <div class="row"><button data-act="copiar">Copiar link</button><a class="zap" href="https://wa.me/?text=${encodeURIComponent("Tarefas da decoração de Natal: " + location.origin)}" target="_blank" rel="noopener">Enviar no WhatsApp</a></div></div>`;
 }
@@ -654,7 +659,7 @@ document.addEventListener("click", async ev => {
     case "del-anx": return acao("DELETE", "/api/anexos/" + id);
     case "del-obs": return acao("DELETE", "/api/obs/" + id);
     case "nf-save": { const n = val("nf-nome"), t = val("nf-tel"); if (!n || !t) { S.err = !n ? "Digite o nome do colaborador." : "Digite o celular com DDD."; draw(); return; }
-      await acao("POST", "/api/funcionarios", { nome: n, telefone: t }); if (!S.err) { const a = document.getElementById("nf-nome"), b2 = document.getElementById("nf-tel"); if (a) a.value = ""; if (b2) b2.value = ""; } return; }
+      const gt = document.getElementById("nf-gestor"); await acao("POST", "/api/funcionarios", { nome: n, telefone: t, gestor: !!(gt && gt.checked) }); if (gt) gt.checked = false; if (!S.err) { const a = document.getElementById("nf-nome"), b2 = document.getElementById("nf-tel"); if (a) a.value = ""; if (b2) b2.value = ""; } return; }
     case "ef": S.ed = "func:" + id; return draw();
     case "ef-save": { const n = val("ef-nome"); if (!n) return; S.ed = null; return acao("PATCH", "/api/funcionarios/" + id, { nome: n, telefone: val("ef-tel") }); }
     case "del-func": return acao("DELETE", "/api/funcionarios/" + id);
