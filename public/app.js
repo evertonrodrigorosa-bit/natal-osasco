@@ -119,7 +119,8 @@ function drawInner() {
     const tabs = [["nova", "＋ Nova tarefa"], ["acompanhar", "Acompanhar"], ["equipe", "Equipe"], ["seg", "🛡 Segurança"]];
     if (!S.tab || !tabs.some(x => x[0] === S.tab)) S.tab = "nova";
     h += `<nav class="tabs">${tabs.map(([k, l]) => chip("tab", k, S.tab === k, l)).join("")}</nav>`;
-    if (S.tab !== "equipe" && S.tab !== "seg") h += alertas() + botaoPush();
+    if (S.tab !== "equipe" && S.tab !== "seg") h += alertas();
+    h += botaoPush();
     h += S.tab === "nova" ? wizard() : S.tab === "equipe" ? equipe() : S.tab === "seg" ? segGestor() : acompanhar();
   } else if (S.d.eu.panico) {
     if (S.tab !== "seg") S.tab = "tarefas";
@@ -622,13 +623,16 @@ function fotoPequena(file) {
 const temPush = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 const chavePush = () => "push_" + (G() ? "gestor" : EU());
 function botaoPush() {
-  if (temPush() && Notification.permission === "granted" && ls.get(chavePush())) return "";
-  if (temPush() && Notification.permission === "denied") return `<p class="note push-n">🔕 Os avisos no celular estão bloqueados. Para ligar, libere as notificações deste site nas configurações do navegador.</p>`;
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const instalado = window.matchMedia && matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  if (temPush() && Notification.permission === "granted" && ls.get(chavePush()))
+    return `<div class="push ok"><span>🔔 Avisos ligados neste celular.</span><button class="ghost" data-act="push-teste">Mandar aviso de teste</button></div>`;
+  if (temPush() && Notification.permission === "denied") return `<div class="push"><span>🔕 Os avisos estão <b>bloqueados</b> neste celular. ${ios ? "No iPhone: Ajustes › Notificações › Natal Osasco › Permitir." : "Toque no cadeado ao lado do endereço do site › Notificações › Permitir. Depois volte aqui."}</span></div>`;
   if (!temPush()) {
-    const ios = /iPhone|iPad/.test(navigator.userAgent);
-    return ios ? `<p class="note push-n">🔔 No iPhone, para receber avisos: toque em Compartilhar e depois em <b>Adicionar à Tela de Início</b>, e abra o app por lá.</p>` : "";
+    if (ios && !instalado) return `<div class="push ios"><span><b>🔔 Para receber avisos no iPhone:</b><ol><li>Abra este site no <b>Safari</b>.</li><li>Toque em <b>Compartilhar</b> (quadrado com a seta ⬆️ embaixo).</li><li>Toque em <b>Adicionar à Tela de Início</b> e depois em Adicionar.</li><li>Feche o Safari e abra o app pelo <b>ícone novo</b> na tela do celular.</li><li>Entre com o seu celular e aí vai aparecer o botão <b>Ativar avisos</b>.</li></ol></span></div>`;
+    return `<div class="push"><span>🔕 Este navegador não recebe avisos. ${ios ? "Atualize o iPhone (iOS 16.4 ou mais novo) e abra o app pelo ícone da Tela de Início." : "Abra o site no <b>Google Chrome</b>."}</span></div>`;
   }
-  return `<div class="push"><span>🔔 ${S.d.eu.seguranca ? "Ative para o <b>alarme da ronda</b> tocar no celular mesmo com o app fechado." : `Receba as tarefas novas${G() ? ", quem terminou e a chegada dos seguranças" : " e o aviso de prazo"} direto no celular.`}</span><button class="primary" data-act="push">Ativar avisos</button></div>`;
+  return `<div class="push"><span>🔔 ${S.d.eu.seguranca ? "Ative para o <b>alarme da ronda</b> tocar no celular mesmo com o app fechado." : S.d.eu.panico ? "Ative para o <b>alarme do pânico</b> tocar no seu celular mesmo com o app fechado." : `Receba as tarefas novas${G() ? ", o pânico dos seguranças (sem som)" : " e o aviso de prazo"} direto no celular.`}</span><button class="primary" data-act="push">Ativar avisos</button></div>`;
 }
 function b64(s) { const p = "=".repeat((4 - s.length % 4) % 4), r = atob((s + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(r, c => c.charCodeAt(0)); }
 async function assinarPush(teste) {
@@ -688,6 +692,7 @@ document.addEventListener("click", async ev => {
     case "topo": window.scrollTo({ top: 0, behavior: "smooth" }); return;
     case "lembrete-ok": S.lembreteVisto = true; return draw();
     case "push": return ativarPush(b);
+    case "push-teste": try { await assinarPush(true); S.err = ""; } catch (e) { S.err = "Não consegui mandar o teste: " + e.message; } return draw();
     case "tab": S.tab = b.dataset.k; S.ed = null; if (S.tab === "nova" && S.wz.criada) S.wz = novoWz(); return draw();
     case "fprio": S.fPrio = b.dataset.k; return draw();
     case "fstatus": S.fStatus = b.dataset.k; return draw();
