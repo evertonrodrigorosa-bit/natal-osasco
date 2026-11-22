@@ -70,6 +70,18 @@ function avisar() {
   }
   ultimoAviso = ids;
 }
+// Recarrega o app sozinho quando sai uma versão nova (sem atrapalhar quem está tirando foto ou digitando)
+let versaoApp = null;
+async function checarVersao() {
+  try {
+    const { v } = await (await fetch("/versao", { cache: "no-store" })).json();
+    if (!versaoApp) { versaoApp = v; return; }
+    const ocupado = S.busy || document.getElementById("camera") || document.getElementById("visor") || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+    if (v !== versaoApp && !ocupado) location.reload();
+  } catch (e) {}
+}
+checarVersao(); setInterval(checarVersao, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checarVersao(); });
 async function carregar() {
   if (!S.chave) return;
   try { S.d = await api("GET", "/api/estado"); if (S.err.startsWith("Sem conexão")) S.err = ""; avisar(); renovarPush(); checarAlarme(); }

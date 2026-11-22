@@ -90,6 +90,11 @@ async function migrar() {
       ON CONFLICT(telefone) DO UPDATE SET gestor=true, seguranca=false`, [crypto.randomBytes(12).toString("base64url"), Date.now()]);
     await q("INSERT INTO config(chave,valor) VALUES('seed_patricia','1') ON CONFLICT DO NOTHING");
   }
+  // Ponto zero da praça passado pelo Bruce em 2026-11-22 (raio padrão 300 m; o gestor pode mudar na aba Segurança)
+  if (!(await q("SELECT 1 FROM config WHERE chave='seed_base_praca'")).length) {
+    await q("INSERT INTO config(chave,valor) VALUES('base_seg',$1) ON CONFLICT(chave) DO UPDATE SET valor=$1", [JSON.stringify({ lat: -23.49623, lng: -46.76902, raio: 300 })]);
+    await q("INSERT INTO config(chave,valor) VALUES('seed_base_praca','1') ON CONFLICT DO NOTHING");
+  }
   // Pedido do Bruce em 2026-11-22: Alex recebe o alarme de pânico dos seguranças (feito uma vez só)
   if (!(await q("SELECT 1 FROM config WHERE chave='seed_alex'")).length) {
     await q(`INSERT INTO funcionarios(nome,telefone,token,criado,panico) VALUES('Alex','11987997850',$1,$2,true)
@@ -130,6 +135,9 @@ app.use(express.static(path.join(__dirname, "public"), { maxAge: 0 }));
 
 // Usado pelo "despertador" do GitHub para o servidor grátis não dormir
 app.get("/ping", (req, res) => res.type("text").send("ok"));
+// Versão do app: o celular confere e recarrega sozinho quando sai versão nova
+const VERSAO = process.env.RENDER_GIT_COMMIT || String(Date.now());
+app.get("/versao", (req, res) => res.set("Cache-Control", "no-store").json({ v: VERSAO }));
 
 // Público: entrada do funcionário pelo celular
 const fone = v => { let d = String(v || "").replace(/\D/g, ""); if (d.length > 11 && d.startsWith("55")) d = d.slice(2); return d.length === 10 || d.length === 11 ? d : null; };
