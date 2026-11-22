@@ -491,6 +491,7 @@ function segGestor(ro) {
 const PANICO_ATIVO = 60 * 60e3;
 const panicoAberto = p => !p.atendido_em && Date.now() - Number(p.em) < PANICO_ATIVO;
 const linkMapa = p => p.lat !== null && p.lat !== undefined ? `https://maps.google.com/?q=${p.lat},${p.lng}` : "";
+const margem = p => p.precisao ? ` (margem de ±${p.precisao >= 1000 ? (p.precisao / 1000).toFixed(1).replace(".", ",") + " km" : p.precisao + " m"})` : "";
 function statusPanico() {
   const meu = (S.d.panicos || [])[0], ab = meu && Date.now() - Number(meu.em) < PANICO_ATIVO ? meu : null, c = (S.d.centrais || [])[0];
   let h = "";
@@ -520,7 +521,7 @@ async function dispararPanico() {
   carregar();
   if (navigator.geolocation) navigator.geolocation.getCurrentPosition(
     async p => { try { await api("POST", "/api/seg/panico", { lat: p.coords.latitude, lng: p.coords.longitude, precisao: Math.round(p.coords.accuracy) }); carregar(); } catch (e) {} },
-    () => {}, { enableHighAccuracy: true, timeout: 6000, maximumAge: 60000 });
+    () => {}, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
 }
 // Aviso de pânico para quem recebe (Alex: tela cheia com sirene) e para os gestores (faixa sem som)
 function avisoPanico() {
@@ -532,16 +533,16 @@ function avisoPanico() {
     <button class="primary big" data-act="teste-ok">✅ Ouvi o alarme</button></div></div>`;
   if (!ab.length) return h;
   if (G()) return h + ab.map(p => `<div class="panico-faixa" role="alert"><b>🆘 PÂNICO: ${esc(p.nome)} pediu ajuda às ${hhmm(p.em)}</b>
-    <div class="row">${linkMapa(p) ? `<a href="${linkMapa(p)}" target="_blank" rel="noopener">📍 Ver no mapa</a>` : `<span>sem localização</span>`}${p.telefone ? `<a href="tel:+55${p.telefone}">📞 Ligar</a>` : ""}<button data-act="atender" data-id="${p.id}">✅ Estou atendendo</button></div></div>`).join("");
+    <div class="row">${linkMapa(p) ? `<a href="${linkMapa(p)}" target="_blank" rel="noopener">📍 Ver no mapa${margem(p)}</a>` : `<span>sem localização</span>`}${p.telefone ? `<a href="tel:+55${p.telefone}">📞 Ligar</a>` : ""}<button data-act="atender" data-id="${p.id}">✅ Estou atendendo</button></div></div>`).join("");
   return h + `<div class="modal panico-modal" role="alertdialog" aria-modal="true" aria-labelledby="pn-t"><div class="modal-c alarme">${ab.map(p => `<div class="pn">
-    <h2 id="pn-t">🆘 PÂNICO: ${esc(p.nome)}</h2><p style="margin:0">Pediu ajuda às <b>${hhmm(p.em)}</b>.${linkMapa(p) ? ` Precisão do local: ${p.precisao ? "uns " + p.precisao + " m" : "não informada"}.` : " O celular dele não mandou a localização."}</p>
+    <h2 id="pn-t">🆘 PÂNICO: ${esc(p.nome)}</h2><p style="margin:0">Pediu ajuda às <b>${hhmm(p.em)}</b>.${linkMapa(p) ? ` Local${margem(p) || " sem margem informada"}. Se a margem for grande, confirme por telefone onde ele está.` : " O celular dele não mandou a localização."}</p>
     <div class="row">${linkMapa(p) ? `<a class="primary-a" href="${linkMapa(p)}" target="_blank" rel="noopener">📍 Ver no mapa</a>` : ""}${p.telefone ? `<a class="primary-a" href="tel:+55${p.telefone}">📞 Ligar para ${esc(p.nome)}</a>` : ""}</div>
     <button class="primary big" data-act="atender" data-id="${p.id}">✅ Estou atendendo</button></div>`).join("")}</div></div>`;
 }
 function listaPanicosHtml() {
   const l = (S.d.panicos || []).filter(p => !panicoAberto(p)).slice(0, 5);
   if (!l.length) return "";
-  return `<details class="panel" style="margin-top:12px"><summary><b>🆘 Pânicos nas últimas 24 horas (${l.length})</b></summary>${l.map(p => `<p style="margin:6px 0 0">${esc(p.nome)} · ${fmtDT(p.em)}${p.atendido_em ? ` · atendido por ${esc(p.atendido_por)} às ${hhmm(p.atendido_em)}` : " · ninguém marcou que atendeu"}${linkMapa(p) ? ` · <a href="${linkMapa(p)}" target="_blank" rel="noopener">mapa</a>` : ""}</p>`).join("")}</details>`;
+  return `<details class="panel" style="margin-top:12px"><summary><b>🆘 Pânicos nas últimas 24 horas (${l.length})</b></summary>${l.map(p => `<p style="margin:6px 0 0">${esc(p.nome)} · ${fmtDT(p.em)}${p.atendido_em ? ` · atendido por ${esc(p.atendido_por)} às ${hhmm(p.atendido_em)}` : " · ninguém marcou que atendeu"}${linkMapa(p) ? ` · <a href="${linkMapa(p)}" target="_blank" rel="noopener">mapa${margem(p)}</a>` : ""}</p>`).join("")}</details>`;
 }
 function configPanico() {
   const cs = S.d.centrais || [], ts = S.d.testes || [];
