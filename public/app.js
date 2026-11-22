@@ -408,7 +408,7 @@ function prazoRapido(t) {
 /* ---------- segurança ---------- */
 const HORA = 3600e3;
 const hhmm = ms => fmtH(ms);
-const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>`; };
+const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<span class="sf-w"><a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>${etiquetaLocal(f)}${(() => { const m = (f.suspeita || "").split(" · ").filter(x => !x.startsWith("fora da praça")).join(" · "); return m ? `<span class="geo fora" title="${esc(m)}">⚠ ${esc(m)}</span>` : ""; })()}</span>`; };
 const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
 const listaDe = fid => { const g = S.d.seg.guardas.find(x => x.id === fid); return g && g.locais && g.locais.length >= 3 ? g.locais : S.d.seg.locais; };
 function infoTurno(t, fotos) {
@@ -458,6 +458,8 @@ function segGestor(ro) {
       if (aberto) {
         const it = infoTurno(aberto, sg.fotos), at = it.rondas[it.total - 1];
         st = `🟢 Chegou ${hhmm(aberto.inicio)} · rondas ${it.completas}/${it.total}`; cls = "on";
+        if (aberto.pos_em && sg.base) { const pp = { lat: aberto.pos_lat, lng: aberto.pos_lng, precisao: aberto.pos_prec };
+          st += foraDaBase(sg.base, pp) ? ` · <span class="late-txt">⚠ fora da praça (${fmtDist(distM(sg.base, pp))}) às ${hhmm(aberto.pos_em)}</span>` : ` · ✔ na praça às ${hhmm(aberto.pos_em)}`; }
         if (at && !at.fotos.every(Boolean) && Date.now() - at.hora > 10 * 60e3) st += ` · <span class="late-txt">⚠ ronda das ${hhmm(at.hora)} atrasada</span>`;
       } else if (ult) { st = `🔴 Saiu ${fmtDT(ult.fim)}`; cls = "off"; }
       h += `<article class="task guarda ${cls}"><div class="task-h" data-act="seg-abrir" data-id="${g.id}"><div class="t"><div class="d">${esc(g.nome)}</div><div class="meta"><span>🕐 ${esc(g.turno_ini || "")}–${esc(g.turno_fim || "")}</span><span>📍 ${(g.locais || []).length} locais</span><span>${st}</span></div></div><span class="chev" aria-hidden="true">›</span></div>`;
@@ -484,13 +486,86 @@ function segGestor(ro) {
   if (ro) return h;
   h += S.segEd === "novo" ? formGuarda(null) : `<button class="primary" style="margin-top:16px;width:100%" data-act="seg-novo">＋ Cadastrar segurança</button>`;
   h += `<p class="note" style="margin-top:12px">📍 Os locais da ronda são de cada segurança: toque no nome, depois em <b>Editar</b>. A cada ronda o app pede 3 locais e vai alternando pela lista.</p>`;
-  return h + configPanico();
+  return h + configBase() + configPanico();
+}
+
+/* ---------- câmera ao vivo do segurança (sem galeria) ---------- */
+async function enviarFotoSeg(blob, g, extra) {
+  const hd = Object.assign({ "content-type": "image/jpeg", "x-chave": S.chave, "x-tipo": S.segTipo, "x-local": S.segLocal }, extra || {});
+  if (g) Object.assign(hd, { "x-lat": String(g.lat), "x-lng": String(g.lng), "x-prec": String(g.precisao) });
+  const r = await fetch("/api/seg/foto", { method: "POST", headers: hd, body: blob });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || "Falha ao enviar a foto.");
+}
+let camStream = null, camLocal = null;
+function fecharCamera() { if (camStream) camStream.getTracks().forEach(t => t.stop()); camStream = null; const el = document.getElementById("camera"); if (el) el.remove(); }
+async function abrirCamera() {
+  const frente = S.segTipo !== "ronda";
+  const titulo = S.segTipo === "entrada" ? "Foto do rosto: chegada" : S.segTipo === "saida" ? "Foto do rosto: saída" : "Foto da ronda";
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return camAlternativa(frente);
+  fecharCamera();
+  const el = document.createElement("div"); el.id = "camera"; el.className = "camera"; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true");
+  el.innerHTML = `<p class="cam-t">${esc(titulo)}</p><video id="cam-v" autoplay playsinline muted></video><p class="cam-s" id="cam-s">Abrindo a câmera e pegando a localização…</p>
+    <div class="cam-b"><button class="ghost" id="cam-x">Cancelar</button><button class="primary big" id="cam-ok" disabled>📸 Tirar foto</button></div>`;
+  document.body.appendChild(el);
+  el.querySelector("#cam-x").onclick = fecharCamera;
+  camLocal = null; pegarLocal(12000).then(g => { camLocal = g; const s = document.getElementById("cam-s"); if (s) s.textContent = g ? `📍 Localização pronta (±${g.precisao} m)` : "⚠ Sem localização: ligue a Localização do celular."; });
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: frente ? "user" : { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false });
+    const v = el.querySelector("#cam-v"); v.srcObject = camStream; await v.play().catch(() => {});
+    const ok = el.querySelector("#cam-ok"); ok.disabled = false;
+    ok.onclick = async () => {
+      ok.disabled = true; ok.textContent = "Enviando…";
+      try {
+        const k = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight)), c = document.createElement("canvas");
+        c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k); const x = c.getContext("2d");
+        x.drawImage(v, 0, 0, c.width, c.height);
+        const g = camLocal, b = S.d.seg && S.d.seg.base, agora = new Date();
+        const linhas = [`${S.d.eu.nome} · ${titulo}${S.segTipo === "ronda" ? " · " + ((document.querySelector(`[data-act="seg-foto"][data-id="${S.segLocal}"]`) || {}).textContent || "").replace("📸", "").trim() : ""}`,
+          agora.toLocaleString("pt-BR", { timeZone: TZ }) + (g ? ` · ${g.lat.toFixed(5)}, ${g.lng.toFixed(5)} ±${g.precisao}m` : " · sem localização") + (g && b ? ` · ${foraDaBase(b, g) ? "FORA " + fmtDist(distM(b, g)) : "na praça"}` : "")];
+        const fs = Math.max(14, Math.round(c.width / 38)); x.fillStyle = "rgba(0,0,0,.6)"; x.fillRect(0, c.height - fs * 3, c.width, fs * 3);
+        x.fillStyle = "#fff"; x.font = `bold ${fs}px sans-serif`; linhas.forEach((l, i) => x.fillText(l, fs / 2, c.height - fs * (1.9 - i * 1.2), c.width - fs));
+        const blob = await new Promise((res, rej) => c.toBlob(bb => bb ? res(bb) : rej(new Error("Não consegui gerar a foto.")), "image/jpeg", 0.75));
+        await enviarFotoSeg(blob, g, { "x-origem": "camera" }); S.err = ""; fecharCamera(); carregar();
+      } catch (e) { ok.disabled = false; ok.textContent = "📸 Tirar foto"; const s = document.getElementById("cam-s"); if (s) s.textContent = "⚠ " + e.message; }
+    };
+  } catch (e) { fecharCamera(); camAlternativa(frente); }
+}
+function camAlternativa(frente) {
+  // Celular sem câmera ao vivo no navegador: usa a câmera do sistema (a foto fica marcada se for antiga)
+  const inp = document.getElementById("foto-seg"); inp.setAttribute("capture", frente ? "user" : "environment"); inp.value = ""; inp.click();
+}
+
+/* ---------- local de trabalho (praça) ---------- */
+function pegarLocal(espera = 8000) {
+  return new Promise(res => { if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lng: p.coords.longitude, precisao: Math.round(p.coords.accuracy) }), () => res(null), { enableHighAccuracy: true, timeout: espera, maximumAge: 0 }); });
+}
+function distM(a, b) { const R = 6371e3, k = Math.PI / 180, dLat = (b.lat - a.lat) * k, dLng = (b.lng - a.lng) * k;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * k) * Math.cos(b.lat * k) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); }
+const fmtDist = m => m >= 1000 ? (m / 1000).toFixed(1).replace(".", ",") + " km" : Math.round(m) + " m";
+const foraDaBase = (b, p) => b && p && p.lat !== null && p.lat !== undefined ? distM(b, p) - Math.min(p.precisao || 0, 500) > b.raio : false;
+function etiquetaLocal(p) {
+  const b = S.d.seg && S.d.seg.base; if (!p || p.lat === null || p.lat === undefined) return "";
+  const u = `https://maps.google.com/?q=${p.lat},${p.lng}`;
+  if (!b) return `<a class="geo" href="${u}" target="_blank" rel="noopener">📍 mapa</a>`;
+  const d = distM(b, p); return foraDaBase(b, p) ? `<a class="geo fora" href="${u}" target="_blank" rel="noopener">⚠ ${fmtDist(d)} fora</a>` : `<a class="geo" href="${u}" target="_blank" rel="noopener">✔ na praça</a>`;
+}
+function configBase() {
+  const b = S.d.seg.base;
+  return `<section class="grupo"><div class="grupo-h"><h2>📍 Local de trabalho (praça)</h2></div><div class="panel">
+    ${b ? `<p style="margin:0">Definido: <a href="https://maps.google.com/?q=${b.lat},${b.lng}" target="_blank" rel="noopener">ver no mapa</a>, raio de <b>${fmtDist(b.raio)}</b>. Quando um segurança aparecer fora desse raio, os gestores recebem um aviso sem som.</p>`
+      : `<p style="margin:0">Ainda não definido. Defina o ponto da praça para o app avisar quando um segurança sair dela.</p>`}
+    <p class="note" style="margin:0">O app confere a posição em cada foto (chegada, rondas e saída) e a cada 3 minutos enquanto o app do segurança estiver aberto. Com o celular bloqueado e o app fechado, o celular não manda a localização.</p>
+    <div class="grid2"><label class="f">Raio em metros<input id="bs-raio" type="number" inputmode="numeric" min="50" max="20000" value="${b ? b.raio : 300}"></label>
+    <label class="f">Ou cole o link do Google Maps / coordenadas<input id="bs-link" placeholder="-23.53, -46.79"></label></div>
+    <div class="row"><button class="primary" data-act="base-aqui">📍 Estou na praça: usar minha localização</button><button data-act="base-link">Salvar pelo link</button>${b ? confirmBtn("base-tirar", 0, "Tirar") : ""}</div></div></section>`;
 }
 
 /* ---------- botão de pânico ---------- */
 const PANICO_ATIVO = 60 * 60e3;
 const panicoAberto = p => !p.atendido_em && Date.now() - Number(p.em) < PANICO_ATIVO;
 const linkMapa = p => p.lat !== null && p.lat !== undefined ? `https://maps.google.com/?q=${p.lat},${p.lng}` : "";
+const margem = p => p.precisao ? ` (margem de ±${p.precisao >= 1000 ? (p.precisao / 1000).toFixed(1).replace(".", ",") + " km" : p.precisao + " m"})` : "";
 function statusPanico() {
   const meu = (S.d.panicos || [])[0], ab = meu && Date.now() - Number(meu.em) < PANICO_ATIVO ? meu : null, c = (S.d.centrais || [])[0];
   let h = "";
@@ -520,7 +595,7 @@ async function dispararPanico() {
   carregar();
   if (navigator.geolocation) navigator.geolocation.getCurrentPosition(
     async p => { try { await api("POST", "/api/seg/panico", { lat: p.coords.latitude, lng: p.coords.longitude, precisao: Math.round(p.coords.accuracy) }); carregar(); } catch (e) {} },
-    () => {}, { enableHighAccuracy: true, timeout: 6000, maximumAge: 60000 });
+    () => {}, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
 }
 // Aviso de pânico para quem recebe (Alex: tela cheia com sirene) e para os gestores (faixa sem som)
 function avisoPanico() {
@@ -532,19 +607,19 @@ function avisoPanico() {
     <button class="primary big" data-act="teste-ok">✅ Ouvi o alarme</button></div></div>`;
   if (!ab.length) return h;
   if (G()) return h + ab.map(p => `<div class="panico-faixa" role="alert"><b>🆘 PÂNICO: ${esc(p.nome)} pediu ajuda às ${hhmm(p.em)}</b>
-    <div class="row">${linkMapa(p) ? `<a href="${linkMapa(p)}" target="_blank" rel="noopener">📍 Ver no mapa</a>` : `<span>sem localização</span>`}${p.telefone ? `<a href="tel:+55${p.telefone}">📞 Ligar</a>` : ""}<button data-act="atender" data-id="${p.id}">✅ Estou atendendo</button></div></div>`).join("");
+    <div class="row">${linkMapa(p) ? `<a href="${linkMapa(p)}" target="_blank" rel="noopener">📍 Ver no mapa${margem(p)}</a>` : `<span>sem localização</span>`}${p.telefone ? `<a href="tel:+55${p.telefone}">📞 Ligar</a>` : ""}<button data-act="atender" data-id="${p.id}">✅ Estou atendendo</button></div></div>`).join("");
   return h + `<div class="modal panico-modal" role="alertdialog" aria-modal="true" aria-labelledby="pn-t"><div class="modal-c alarme">${ab.map(p => `<div class="pn">
-    <h2 id="pn-t">🆘 PÂNICO: ${esc(p.nome)}</h2><p style="margin:0">Pediu ajuda às <b>${hhmm(p.em)}</b>.${linkMapa(p) ? ` Precisão do local: ${p.precisao ? "uns " + p.precisao + " m" : "não informada"}.` : " O celular dele não mandou a localização."}</p>
+    <h2 id="pn-t">🆘 PÂNICO: ${esc(p.nome)}</h2><p style="margin:0">Pediu ajuda às <b>${hhmm(p.em)}</b>.${linkMapa(p) ? ` Local${margem(p) || " sem margem informada"}. Se a margem for grande, confirme por telefone onde ele está.` : " O celular dele não mandou a localização."}</p>
     <div class="row">${linkMapa(p) ? `<a class="primary-a" href="${linkMapa(p)}" target="_blank" rel="noopener">📍 Ver no mapa</a>` : ""}${p.telefone ? `<a class="primary-a" href="tel:+55${p.telefone}">📞 Ligar para ${esc(p.nome)}</a>` : ""}</div>
     <button class="primary big" data-act="atender" data-id="${p.id}">✅ Estou atendendo</button></div>`).join("")}</div></div>`;
 }
 function listaPanicosHtml() {
   const l = (S.d.panicos || []).filter(p => !panicoAberto(p)).slice(0, 5);
   if (!l.length) return "";
-  return `<details class="panel" style="margin-top:12px"><summary><b>🆘 Pânicos nas últimas 24 horas (${l.length})</b></summary>${l.map(p => `<p style="margin:6px 0 0">${esc(p.nome)} · ${fmtDT(p.em)}${p.atendido_em ? ` · atendido por ${esc(p.atendido_por)} às ${hhmm(p.atendido_em)}` : " · ninguém marcou que atendeu"}${linkMapa(p) ? ` · <a href="${linkMapa(p)}" target="_blank" rel="noopener">mapa</a>` : ""}</p>`).join("")}</details>`;
+  return `<details class="panel" style="margin-top:12px"><summary><b>🆘 Pânicos nas últimas 24 horas (${l.length})</b></summary>${l.map(p => `<p style="margin:6px 0 0">${esc(p.nome)} · ${fmtDT(p.em)}${p.atendido_em ? ` · atendido por ${esc(p.atendido_por)} às ${hhmm(p.atendido_em)}` : " · ninguém marcou que atendeu"}${linkMapa(p) ? ` · <a href="${linkMapa(p)}" target="_blank" rel="noopener">mapa${margem(p)}</a>` : ""}</p>`).join("")}</details>`;
 }
 function configPanico() {
-  const cs = S.d.centrais || [], zs = S.d.zap || [], ts = S.d.testes || [];
+  const cs = S.d.centrais || [], ts = S.d.testes || [];
   let h = `<section class="grupo"><div class="grupo-h"><h2>🆘 Quem ouve o alarme do pânico</h2><span class="cnt">${cs.length}</span></div><div class="panel">
     <p class="note" style="margin:0">Quando um segurança segura o botão de pânico, o alarme toca no celular destas pessoas. Elas também veem os seguranças, sem poder mudar nada, e recebem tarefas normalmente.</p>`;
   for (const c of cs) {
@@ -555,12 +630,6 @@ function configPanico() {
   }
   h += `<div class="grid2" style="margin-top:8px"><label class="f">Nome<input id="ct-nome" maxlength="60"></label><label class="f">Celular com DDD<input id="ct-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label></div>
     <button data-act="add-central">＋ Adicionar</button></div></section>`;
-  h += `<section class="grupo"><div class="grupo-h"><h2>📲 Pânico para os gestores</h2><span class="cnt">${zs.length}</span></div><div class="panel">
-    <p class="note" style="margin:0">Os gestores já recebem o pânico como <b>aviso no celular, sem som</b> (é só ter tocado em "Ativar avisos" no app). O WhatsApp é um extra opcional: o serviço grátis (CallMeBot) está lotado agora e prometeu um número novo em alguns dias. Quando abrir, é só:</p>
-    <ol class="passos"><li>Salve nos contatos o número <b>+34 644 66 32 62</b>.</li><li>Mande para ele no WhatsApp: <b>I allow callmebot to send me messages</b></li><li>Ele responde com uma <b>APIKEY</b> (um número). Coloque aqui embaixo.</li></ol>`;
-  for (const z of zs) h += `<div class="p"><span>📲 ${esc(z.nome)}<br><small class="note">${esc(fmtTel(z.telefone))}</small></span>${confirmBtn("del-zap", z.telefone, "Tirar")}</div>`;
-  h += `<div class="grid3"><label class="f">Nome<input id="zp-nome" maxlength="60" value="${esc(zs.length ? "" : S.d.eu.nome || "")}"></label><label class="f">Celular<input id="zp-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label><label class="f">APIKEY<input id="zp-key" inputmode="numeric" maxlength="20"></label></div>
-    <button data-act="add-zap">Salvar e mandar mensagem de teste</button></div></section>`;
   return h;
 }
 // Sirene: toca sem parar enquanto houver pânico sem atendimento (ou um teste) para quem recebe o pânico
@@ -608,6 +677,14 @@ function checarAlarme() {
   if (feita) tocar(false);
 }
 setInterval(checarAlarme, 10000);
+// Enquanto o app do segurança está aberto, manda a posição a cada 3 minutos (para avisar se sair da praça)
+let ultimaPos = 0;
+async function enviarPosicao() {
+  if (!S.d || G() || !S.d.eu.seguranca || document.hidden || Date.now() - ultimaPos < 170e3) return;
+  if (!S.d.seg.turnos.some(x => !x.fim)) return;
+  ultimaPos = Date.now(); const g = await pegarLocal(); if (g) api("POST", "/api/seg/posicao", g).catch(() => {});
+}
+setInterval(enviarPosicao, 30000); document.addEventListener("visibilitychange", () => { if (!document.hidden) { ultimaPos = 0; enviarPosicao(); } });
 function fotoPequena(file) {
   return new Promise((res, rej) => {
     const img = new Image(), u = URL.createObjectURL(file);
@@ -720,8 +797,7 @@ document.addEventListener("click", async ev => {
     case "arquivar": S.open.delete(id); return acao("POST", `/api/tarefas/${id}/arquivar`);
     case "desarquivar": S.open.delete(id); return acao("POST", `/api/tarefas/${id}/arquivar`, { desfazer: true });
     case "arq-todas": return acao("POST", "/api/tarefas/arquivar-concluidas");
-    case "seg-foto": { tocar(false); S.segTipo = b.dataset.k; S.segLocal = b.dataset.id || "0"; const inp = document.getElementById("foto-seg");
-      inp.setAttribute("capture", S.segTipo === "ronda" ? "environment" : "user"); inp.value = ""; inp.click(); return; }
+    case "seg-foto": { tocar(false); S.segTipo = b.dataset.k; S.segLocal = b.dataset.id || "0"; return abrirCamera(); }
     case "seg-alarme-ok": tocar(false); S.alarmeVisto = S.alarmeRodada; return draw();
     case "seg-abrir": S.segAberto === id ? S.segAberto = null : S.segAberto = id; return draw();
     case "seg-novo": S.segEd = "novo"; return draw();
@@ -732,13 +808,19 @@ document.addEventListener("click", async ev => {
     case "seg-locais": S.segLocais = !S.segLocais; return draw();
     case "seg-locais-salvar": S.segLocais = false; return acao("POST", "/api/seg/locais", { locais: [val("lc-0"), val("lc-1"), val("lc-2")] });
     case "seg-encerrar": return acao("POST", `/api/seg/turnos/${id}/encerrar`);
+    case "base-aqui": { b.disabled = true; b.textContent = "Pegando a localização…"; const g = await pegarLocal(15000);
+      if (!g) { S.err = "Não consegui pegar a sua localização. Ligue a Localização do celular e permita para este site."; return draw(); }
+      if (g.precisao > 150) S.err = `Atenção: a localização veio com margem de ±${g.precisao} m. Se possível, tente de novo ao ar livre.`;
+      return acao("POST", "/api/seg/base", { lat: g.lat, lng: g.lng, raio: val("bs-raio") }); }
+    case "base-link": { const t = val("bs-link"), m = t.match(/(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/);
+      if (!m) { S.err = "Não achei as coordenadas. No Google Maps, segure o dedo no ponto e copie os números (ex.: -23.53, -46.79)."; return draw(); }
+      return acao("POST", "/api/seg/base", { lat: m[1], lng: m[2], raio: val("bs-raio") }); }
+    case "base-tirar": return acao("POST", "/api/seg/base", { remover: true });
     case "atender": return acao("POST", `/api/panicos/${id}/atender`);
     case "teste-ok": return acao("POST", "/api/teste-alarme/ok");
     case "testar-alarme": try { const r = await api("POST", `/api/seg/centrais/${id}/testar`); S.err = r.celulares ? "" : "Teste criado, mas essa pessoa ainda não ativou os avisos no celular. Ela só vai ouvir com o app aberto. Peça para entrar e tocar em Ativar avisos."; } catch (e) { S.err = e.message; } return carregar();
     case "add-central": return acao("POST", "/api/seg/centrais", { nome: val("ct-nome"), telefone: val("ct-tel") });
     case "del-central": return acao("POST", `/api/seg/centrais/${id}/remover`);
-    case "add-zap": try { S.busy = true; const r = await api("POST", "/api/seg/zap", { nome: val("zp-nome"), telefone: val("zp-tel"), apikey: val("zp-key") }); S.err = r.aviso || ""; } catch (e) { S.err = e.message; } S.busy = false; return carregar();
-    case "del-zap": return acao("POST", "/api/seg/zap/remover", { telefone: b.dataset.id });
     case "ver-alertas": S.tab = "acompanhar"; draw(); window.scrollTo({ top: 0 }); return;
     case "del-modelo": return acao("DELETE", "/api/modelos/" + id);
     case "ir-tarefa": S.tab = "acompanhar"; S.fStatus = "todas"; S.fPrio = "todas"; S.fPessoa = ""; S.open.add(id); draw();
@@ -813,11 +895,8 @@ document.addEventListener("change", async ev => {
   if (ev.target.id === "foto-seg") {
     const f0 = ev.target.files[0]; ev.target.value = ""; if (!f0) return;
     S.busy = true; S.err = ""; S.enviandoFoto = 1; draw();
-    try {
-      const f = await fotoPequena(f0);
-      const r = await fetch("/api/seg/foto", { method: "POST", headers: { "content-type": "image/jpeg", "x-chave": S.chave, "x-tipo": S.segTipo, "x-local": S.segLocal }, body: f });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || "Falha ao enviar a foto.");
-    } catch (e) { S.err = e.message; }
+    try { const [f, g] = await Promise.all([fotoPequena(f0), pegarLocal()]); await enviarFotoSeg(f, g, { "x-origem": "arquivo", "x-tirada": String(f0.lastModified || "") }); }
+    catch (e) { S.err = e.message; }
     S.busy = false; S.enviandoFoto = null; return carregar();
   }
   if (ev.target.id === "foto-fim") {

@@ -208,6 +208,11 @@ div.loc small{font-weight:500}
 @keyframes pisca{50%{background:rgba(60,0,0,.9)}}
 @media (prefers-reduced-motion:reduce){.panico-modal{animation:none}}
 body:has(.panico-bar) #app{padding-bottom:110px}
+.sf-w{display:inline-flex;flex-direction:column;align-items:center;gap:2px;max-width:96px;text-align:center} .geo{font-size:.75rem;color:var(--muted)} .geo.fora{color:var(--late);font-weight:700}
+.camera{position:fixed;inset:0;z-index:30;background:#000;color:#fff;display:flex;flex-direction:column;align-items:stretch;padding:max(12px,env(safe-area-inset-top,0px)) 12px max(12px,env(safe-area-inset-bottom,0px))}
+.camera video{flex:1;min-height:0;width:100%;object-fit:cover;border-radius:12px;background:#111}
+.cam-t{margin:0 0 8px;font-weight:800;font-size:1.1rem} .cam-s{margin:8px 0;font-size:.9rem;color:#ddd}
+.cam-b{display:flex;gap:10px} .cam-b .big{flex:1} .cam-b .ghost{color:#fff;border-color:#666}
 .passos{margin:8px 0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .alarme{border:3px solid var(--late)} .alarme h2{color:var(--late)}
 .task.guarda.on{border-left:6px solid var(--ok)} .task.guarda.off{border-left:6px solid var(--late)} .task.guarda{border-left:6px solid var(--line)}
