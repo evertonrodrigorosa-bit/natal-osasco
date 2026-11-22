@@ -110,18 +110,19 @@ function draw() {
 }
 const chip = (act, k, on, label) => `<button data-act="${act}" data-k="${k}" class="${on ? "on" : ""}">${label}</button>`;
 
+let ultimoHtml = null;
 function drawInner() {
   const role = document.getElementById("role"), stats = document.getElementById("stats");
   let h = S.err ? `<div class="banner">${esc(S.err)}</div>` : "";
   if (S.enviandoFoto) h += `<div class="aviso"><b>📸 Enviando a foto e terminando a tarefa…</b></div>`;
   if (!S.chave || !S.d) {
-    role.hidden = true; stats.innerHTML = "";
+    role.hidden = true; stats.innerHTML = ""; ultimoHtml = null;
     if (S.chave && !S.d) { app.innerHTML = h + `<div class="empty">Carregando…</div>`; return; }
     app.innerHTML = h + entrada(); const f = app.querySelector("[data-autofocus]"); if (f) f.focus(); return;
   }
   role.hidden = false; role.textContent = (G() ? S.d.eu.nome || "Gestor" : S.d.eu.nome) + " · Sair";
   if (!G() && S.d.eu.seguranca) { stats.innerHTML = `<span>🛡 Segurança · turno ${S.d.eu.turno === "noite" ? "da noite" : "do dia"} ${esc(S.d.eu.turno_ini || "")}–${esc(S.d.eu.turno_fim || "")}</span>`;
-    app.innerHTML = h + statusPanico() + segGuarda() + barraPanico(); checarSirene(); return; }
+    { const x = h + statusPanico() + segGuarda() + barraPanico(); if (ultimoHtml !== x) { app.innerHTML = x; ultimoHtml = x; } } checarSirene(); return; }
   h += avisoPanico();
   const ts = ativas(), c = { pend: 0, run: 0, ok: 0, late: 0 };
   ts.forEach(t => { const e = estado(t); if (e === "ok") c.ok++; else if (e === "run" || e === "late-run") c.run++; else c.pend++; if (e.startsWith("late")) c.late++; });
@@ -139,7 +140,7 @@ function drawInner() {
     h += `<nav class="tabs">${chip("tab", "tarefas", S.tab === "tarefas", "Minhas tarefas")}${chip("tab", "seg", S.tab === "seg", "🛡 Seguranças")}</nav>`;
     h += S.tab === "seg" ? botaoPush() + segGestor(true) : colaborador();
   } else h += colaborador();
-  app.innerHTML = h; checarSirene();
+  if (ultimoHtml !== h) { app.innerHTML = h; ultimoHtml = h; } checarSirene();
   const f = app.querySelector("[data-autofocus]"); if (f) f.focus();
 }
 function confirmBtn(act, id, label) {
@@ -420,14 +421,15 @@ function prazoRapido(t) {
 /* ---------- segurança ---------- */
 const HORA = 3600e3;
 const hhmm = ms => fmtH(ms);
-const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<span class="sf-w"><a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>${etiquetaLocal(f)}${(() => { const m = (f.suspeita || "").split(" · ").filter(x => !x.startsWith("fora da praça")).join(" · "); return m ? `<span class="geo fora" title="${esc(m)}">⚠ ${esc(m)}</span>` : ""; })()}</span>`; };
+const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<span class="sf-w"><button type="button" class="sf" data-act="ver-foto" data-k="${u}" data-id="${esc(alt)}"><img src="${u}" alt="${esc(alt)}" decoding="async"><small>${f.tipo === "ronda" ? esc(alt) + "<br>" : ""}${hhmm(f.em)}</small></button>${etiquetaLocal(f)}${(() => { const m = (f.suspeita || "").split(" · ").filter(x => !x.startsWith("fora da praça")).join(" · "); return m ? `<span class="geo fora" title="${esc(m)}">⚠ ${esc(m)}</span>` : ""; })()}</span>`; };
 const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
 const listaDe = fid => { const g = S.d.seg.guardas.find(x => x.id === fid); return g && g.locais && g.locais.length >= 3 ? g.locais : S.d.seg.locais; };
 function infoTurno(t, fotos) {
   const fim = t.fim ? Number(t.fim) : Date.now(), ini = Number(t.inicio);
   const total = Math.floor((fim - ini) / HORA), fs = fotos.filter(f => f.turno_id === t.id);
   const rondas = [];
-  for (let r = 1; r <= total; r++) rondas.push({ r, hora: ini + r * HORA, nomes: locaisDaRonda(listaDe(t.func_id), r), fotos: [0, 1, 2].map(l => fs.find(f => f.tipo === "ronda" && f.rodada === r && f.local === l)) });
+  for (let r = 1; r <= total; r++) { const hora = ini + r * HORA, com4 = hora >= Number(S.d.seg.ronda4 || 0), nomes = locaisDaRonda(listaDe(t.func_id), r).concat(com4 ? ["Rosto"] : []);
+    rondas.push({ r, hora, nomes, fotos: nomes.map((_, l) => fs.find(f => f.tipo === "ronda" && f.rodada === r && f.local === l)) }); }
   return { ini, total, rondas, entrada: fs.find(f => f.tipo === "entrada"), saida: fs.find(f => f.tipo === "saida"), completas: rondas.filter(x => x.fotos.every(Boolean)).length };
 }
 function segGuarda() {
@@ -442,12 +444,12 @@ function segGuarda() {
   if (r < 1) h += `<div class="panel"><p class="h3">Ronda</p><p style="margin:0">A primeira ronda é às <b>${hhmm(it.ini + HORA)}</b>. Nessa hora o alarme toca e você fotografa: ${esc(L.join(", "))}.</p></div>`;
   else {
     const at = it.rondas[r - 1], feita = at.fotos.every(Boolean);
-    h += `<div class="panel ronda ${feita ? "ok" : "pend"}"><p class="h3">Ronda das ${hhmm(at.hora)}</p>${feita ? `<p class="ok-txt" style="margin:0">✔ Ronda completa. A próxima é às ${hhmm(at.hora + HORA)}.</p>` : `<p style="margin:0"><b>Fotografe os 3 locais agora.</b></p>`}
-      <div class="locais">${at.nomes.map((nome, l) => at.fotos[l] ? `<div class="loc ok">✔ ${esc(at.fotos[l].local_nome || nome)}<small>${hhmm(at.fotos[l].em)}</small></div>` : `<button class="primary loc" data-act="seg-foto" data-k="ronda" data-id="${l}">📸 ${esc(nome)}</button>`).join("")}</div></div>`;
+    h += `<div class="panel ronda ${feita ? "ok" : "pend"}"><p class="h3">Ronda das ${hhmm(at.hora)}</p>${feita ? `<p class="ok-txt" style="margin:0">✔ Ronda completa. A próxima é às ${hhmm(at.hora + HORA)}.</p>` : `<p style="margin:0"><b>Fotografe os 3 locais agora${at.nomes.length > 3 ? " e, por último, o seu rosto" : ""}.</b></p>`}
+      <div class="locais">${at.nomes.map((nome, l) => at.fotos[l] ? `<div class="loc ok">✔ ${esc(at.fotos[l].local_nome || nome)}<small>${hhmm(at.fotos[l].em)}</small></div>` : (l === 3 ? (at.fotos.slice(0, 3).every(Boolean) ? `<button class="primary loc" data-act="seg-foto" data-k="ronda" data-id="3">🤳 Por último: foto do seu rosto</button>` : `<div class="loc espera">🤳 Foto do seu rosto (depois dos 3 locais)</div>`) : `<button class="primary loc" data-act="seg-foto" data-k="ronda" data-id="${l}">📸 ${esc(nome)}</button>`)).join("")}</div></div>`;
     const faltaram = it.rondas.slice(0, -1).filter(x => !x.fotos.every(Boolean)).length;
     h += `<p class="note">Rondas completas neste turno: ${it.completas} de ${r}${faltaram ? ` · <span class="late-txt">${faltaram} incompleta${faltaram > 1 ? "s" : ""}</span>` : ""}.</p>`;
     if (!feita && S.alarmeVisto !== r) h += `<div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="al-t"><div class="modal-c alarme"><h2 id="al-t">🔔 Hora da ronda!</h2>
-      <p style="margin:0">Fotografe agora: <b>${esc(at.nomes.join(", "))}</b>.</p><button class="primary big" data-act="seg-alarme-ok">Vou fazer a ronda</button></div></div>`;
+      <p style="margin:0">Fotografe agora: <b>${esc(at.nomes.filter(n => n !== "Rosto").join(", "))}</b>${at.nomes.length > 3 ? " e, por último, o seu <b>rosto</b>" : ""}.</p><button class="primary big" data-act="seg-alarme-ok">Vou fazer a ronda</button></div></div>`;
   }
   h += botaoPush();
   h += `<div class="panel" style="margin-top:22px"><p style="margin:0">Terminou o turno? Tire outra <b>foto do rosto</b>. Seu nome fica vermelho para o gestor.</p>
@@ -499,7 +501,7 @@ function segGestor(ro) {
   }
   if (ro) return h;
   h += S.segEd === "novo" ? formGuarda(null) : `<button class="primary" style="margin-top:16px;width:100%" data-act="seg-novo">＋ Cadastrar segurança</button>`;
-  h += `<p class="note" style="margin-top:12px">📍 Os locais da ronda são de cada segurança: toque no nome, depois em <b>Editar</b>. A cada ronda o app pede 3 locais e vai alternando pela lista.</p>`;
+  h += `<p class="note" style="margin-top:12px">📍 Os locais da ronda são de cada segurança: toque no nome, depois em <b>Editar</b>. A cada ronda o app pede 3 locais (alternando pela lista) e, por último, uma foto do rosto do segurança.</p>`;
   return h + relatorio() + configBase() + configPanico();
 }
 /* ---------- relatório para pagamento ---------- */
@@ -575,8 +577,8 @@ async function enviarFotoSeg(blob, g, extra) {
 let camStream = null, camLocal = null;
 function fecharCamera() { if (camStream) camStream.getTracks().forEach(t => t.stop()); camStream = null; const el = document.getElementById("camera"); if (el) el.remove(); }
 async function abrirCamera() {
-  const frente = S.segTipo !== "ronda";
-  const titulo = S.segTipo === "entrada" ? "Foto do rosto: chegada" : S.segTipo === "saida" ? "Foto do rosto: saída" : "Foto da ronda";
+  const rostoRonda = S.segTipo === "ronda" && String(S.segLocal) === "3", frente = S.segTipo !== "ronda" || rostoRonda;
+  const titulo = S.segTipo === "entrada" ? "Foto do rosto: chegada" : S.segTipo === "saida" ? "Foto do rosto: saída" : rostoRonda ? "Foto do rosto: ronda" : "Foto da ronda";
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return camAlternativa(frente);
   fecharCamera();
   const el = document.createElement("div"); el.id = "camera"; el.className = "camera"; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true");
@@ -596,7 +598,7 @@ async function abrirCamera() {
         c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k); const x = c.getContext("2d");
         x.drawImage(v, 0, 0, c.width, c.height);
         const g = camLocal, b = S.d.seg && S.d.seg.base, agora = new Date();
-        const linhas = [`${S.d.eu.nome} · ${titulo}${S.segTipo === "ronda" ? " · " + ((document.querySelector(`[data-act="seg-foto"][data-id="${S.segLocal}"]`) || {}).textContent || "").replace("📸", "").trim() : ""}`,
+        const linhas = [`${S.d.eu.nome} · ${titulo}${S.segTipo === "ronda" && !rostoRonda ? " · " + ((document.querySelector(`[data-act="seg-foto"][data-id="${S.segLocal}"]`) || {}).textContent || "").replace("📸", "").trim() : ""}`,
           agora.toLocaleString("pt-BR", { timeZone: TZ }) + (g ? ` · ${g.lat.toFixed(5)}, ${g.lng.toFixed(5)} ±${g.precisao}m` : " · sem localização") + (g && b ? ` · ${foraDaBase(b, g) ? "FORA " + fmtDist(distM(b, g)) : "na praça"}` : "")];
         const fs = Math.max(14, Math.round(c.width / 38)); x.fillStyle = "rgba(0,0,0,.6)"; x.fillRect(0, c.height - fs * 3, c.width, fs * 3);
         x.fillStyle = "#fff"; x.font = `bold ${fs}px sans-serif`; linhas.forEach((l, i) => x.fillText(l, fs / 2, c.height - fs * (1.9 - i * 1.2), c.width - fs));
@@ -873,6 +875,7 @@ document.addEventListener("click", async ev => {
     case "arquivar": S.open.delete(id); return acao("POST", `/api/tarefas/${id}/arquivar`);
     case "desarquivar": S.open.delete(id); return acao("POST", `/api/tarefas/${id}/arquivar`, { desfazer: true });
     case "arq-todas": return acao("POST", "/api/tarefas/arquivar-concluidas");
+    case "ver-foto": return abrirFoto(b.dataset.k, b.dataset.id);
     case "seg-foto": { tocar(false); S.segTipo = b.dataset.k; S.segLocal = b.dataset.id || "0"; return abrirCamera(); }
     case "seg-alarme-ok": tocar(false); S.alarmeVisto = S.alarmeRodada; return draw();
     case "seg-abrir": S.segAberto === id ? S.segAberto = null : S.segAberto = id; return draw();
