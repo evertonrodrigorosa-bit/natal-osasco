@@ -91,6 +91,8 @@ async function migrar() {
       ON CONFLICT(telefone) DO UPDATE SET gestor=true, seguranca=false`, [crypto.randomBytes(12).toString("base64url"), Date.now()]);
     await q("INSERT INTO config(chave,valor) VALUES('seed_patricia','1') ON CONFLICT DO NOTHING");
   }
+  // Pedido do Bruce em 2026-11-22: a ronda passa a ter 4 fotos (3 locais + rosto). Rondas antes disso valem com 3.
+  await q("INSERT INTO config(chave,valor) VALUES('ronda4_desde',$1) ON CONFLICT DO NOTHING", [String(Date.now())]);
   // Ponto zero da praça passado pelo Bruce em 2026-11-22 (raio padrão 300 m; o gestor pode mudar na aba Segurança)
   if (!(await q("SELECT 1 FROM config WHERE chave='seed_base_praca'")).length) {
     await q("INSERT INTO config(chave,valor) VALUES('base_seg',$1) ON CONFLICT(chave) DO UPDATE SET valor=$1", [JSON.stringify({ lat: -23.49623, lng: -46.76902, raio: 300 })]);
@@ -206,6 +208,8 @@ const horaOk = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || "")) ? v : null
 // Cada segurança tem a sua lista de locais; a cada ronda o app pega 3 seguidos, alternando pela lista
 const listaLocais = (txt, padrao) => { try { const l = JSON.parse(txt || "null"); if (Array.isArray(l) && l.length >= 3) return l; } catch (e) {} return padrao; };
 const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
+let R4 = null;
+async function ronda4Desde() { if (R4 === null) { const [r] = await q("SELECT valor FROM config WHERE chave='ronda4_desde'"); R4 = r ? Number(r.valor) : 0; } return R4; }
 async function locais() { const [r] = await q("SELECT valor FROM config WHERE chave='locais_seg'"); return r ? JSON.parse(r.valor) : LOCAIS_PADRAO; }
 async function dadosSeg(soFunc) {
   const desde = Date.now() - 3 * 24 * HORA;
@@ -215,7 +219,7 @@ async function dadosSeg(soFunc) {
   const padrao = await locais();
   guardas.forEach(g => { g.locais = listaLocais(g.locais, padrao); });
   const fotos = await q("SELECT id,turno_id,tipo,rodada,local,local_nome,em,lat,lng,precisao,suspeita FROM seg_fotos WHERE turno_id = ANY($1) ORDER BY em", [turnos.map(t => t.id)]);
-  return { guardas, turnos, fotos, locais: await locais(), base: await baseSeg(), agora: Date.now() };
+  return { guardas, turnos, fotos, locais: await locais(), base: await baseSeg(), ronda4: await ronda4Desde(), agora: Date.now() };
 }
 // Local de trabalho dos seguranças (ponto + raio em metros), definido pelo gestor
 async function baseSeg() { const [r] = await q("SELECT valor FROM config WHERE chave='base_seg'"); return r ? JSON.parse(r.valor) : null; }
@@ -280,9 +284,13 @@ app.post("/api/seg/foto", express.raw({ type: () => true, limit: "8mb" }), w(asy
   if (tipo === "ronda") {
     const rodada = Math.floor((agora - Number(t.inicio)) / HORA), local = Number(req.get("x-local"));
     if (rodada < 1) return res.status(400).json({ erro: "A primeira ronda é 1 hora depois da chegada." });
-    if (![0, 1, 2].includes(local)) return res.status(400).json({ erro: "Local inválido." });
+    if (![0, 1, 2, 3].includes(local)) return res.status(400).json({ erro: "Local inválido." });
+    if (local === 3) { // 4ª foto: o rosto, sempre por último (prova de que foi ele mesmo que fez a ronda)
+      const feitas = await q("SELECT DISTINCT local FROM seg_fotos WHERE turno_id=$1 AND tipo='ronda' AND rodada=$2 AND local<3", [t.id, rodada]);
+      if (feitas.length < 3) return res.status(400).json({ erro: "Primeiro fotografe os 3 locais. A foto do rosto é a última." });
+    }
     await q("DELETE FROM seg_fotos WHERE turno_id=$1 AND tipo='ronda' AND rodada=$2 AND local=$3", [t.id, rodada, local]);
-    const nomeLocal = locaisDaRonda(listaLocais(req.eu.locais, await locais()), rodada)[local];
+    const nomeLocal = local === 3 ? "Rosto" : locaisDaRonda(listaLocais(req.eu.locais, await locais()), rodada)[local];
     await q("INSERT INTO seg_fotos(turno_id,tipo,rodada,local,local_nome,mime,tamanho,dados,em) VALUES($1,'ronda',$2,$3,$4,$5,$6,$7,$8)", [t.id, rodada, local, nomeLocal, mime, req.body.length, req.body, agora]);
     await marcarGeo();
     return res.json({ ok: 1 });
@@ -344,7 +352,7 @@ app.get("/api/seg/relatorio", gestor, w(async (req, res) => {
   if (!Number.isFinite(de) || !Number.isFinite(ate) || ate <= de) return res.status(400).json({ erro: "Escolha as datas de início e fim." });
   const turnos = await q(`SELECT t.id,t.func_id,t.inicio,t.fim,t.encerrado_por,f.nome,f.telefone,f.turno,
       (SELECT count(*) FROM seg_fotos s WHERE s.turno_id=t.id AND s.tipo='ronda')::int AS fotos_ronda,
-      (SELECT count(*) FROM (SELECT rodada FROM seg_fotos x WHERE x.turno_id=t.id AND x.tipo='ronda' GROUP BY rodada HAVING count(DISTINCT local)=3) z)::int AS rondas_ok,
+      (SELECT count(*) FROM (SELECT rodada FROM seg_fotos x WHERE x.turno_id=t.id AND x.tipo='ronda' GROUP BY rodada HAVING count(DISTINCT local) >= CASE WHEN t.inicio + rodada * 3600000 < ${Number(await ronda4Desde())} THEN 3 ELSE 4 END) z)::int AS rondas_ok,
       EXISTS(SELECT 1 FROM seg_fotos s WHERE s.turno_id=t.id AND s.tipo='entrada') AS foto_entrada,
       EXISTS(SELECT 1 FROM seg_fotos s WHERE s.turno_id=t.id AND s.tipo='saida') AS foto_saida,
       (SELECT count(*) FROM seg_fotos s WHERE s.turno_id=t.id AND s.suspeita IS NOT NULL)::int AS suspeitas
@@ -446,7 +454,7 @@ async function verificarRondas() {
     if (rodada >= 1 && rodada > t.ronda_avisada && rodada <= 24) {
       await q("UPDATE turnos SET ronda_avisada=$1 WHERE id=$2", [rodada, t.id]);
       const nomes = locaisDaRonda(listaLocais(t.locais, await locais()), rodada).join(", ");
-      await avisarCelular({ func: [t.func_id] }, { title: "🔔 Hora da ronda!", body: `Abra o app e fotografe: ${nomes}.`, tag: "ronda" + t.id, alarme: true });
+      await avisarCelular({ func: [t.func_id] }, { title: "🔔 Hora da ronda!", body: `Abra o app e fotografe: ${nomes}. Por último, uma foto do seu rosto.`, tag: "ronda" + t.id, alarme: true });
     }
   }
 }
