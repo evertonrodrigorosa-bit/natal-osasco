@@ -489,6 +489,28 @@ function segGestor(ro) {
   return h + configBase() + configPanico();
 }
 
+/* ---------- ver foto em tela cheia, com botão de voltar ---------- */
+function fecharFoto(viaHistorico) {
+  const el = document.getElementById("visor"); if (!el) return; el.remove();
+  if (!viaHistorico && history.state && history.state.visor) history.back();
+}
+function abrirFoto(src, legenda) {
+  fecharFoto(true);
+  const el = document.createElement("div"); el.id = "visor"; el.className = "visor"; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true");
+  el.innerHTML = `<div class="visor-b"><button class="primary" id="visor-x">← Voltar</button><span>${esc(legenda || "")}</span></div><img src="${src}" alt="${esc(legenda || "Foto")}">`;
+  document.body.appendChild(el);
+  el.querySelector("#visor-x").onclick = () => fecharFoto();
+  el.onclick = ev => { if (ev.target === el) fecharFoto(); };
+  history.pushState({ visor: 1 }, "");
+}
+window.addEventListener("popstate", () => fecharFoto(true));
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") fecharFoto(); });
+document.addEventListener("click", ev => {
+  const l = ev.target.closest && ev.target.closest("a[href]"); if (!l) return;
+  const img = l.querySelector("img"); if (!img || !l.getAttribute("href").startsWith("/api/")) return;
+  ev.preventDefault(); ev.stopPropagation(); abrirFoto(l.getAttribute("href"), img.getAttribute("alt"));
+}, true);
+
 /* ---------- câmera ao vivo do segurança (sem galeria) ---------- */
 async function enviarFotoSeg(blob, g, extra) {
   const hd = Object.assign({ "content-type": "image/jpeg", "x-chave": S.chave, "x-tipo": S.segTipo, "x-local": S.segLocal }, extra || {});
