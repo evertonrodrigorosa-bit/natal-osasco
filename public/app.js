@@ -408,7 +408,7 @@ function prazoRapido(t) {
 /* ---------- segurança ---------- */
 const HORA = 3600e3;
 const hhmm = ms => fmtH(ms);
-const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<span class="sf-w"><a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>${etiquetaLocal(f)}</span>`; };
+const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<span class="sf-w"><a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>${etiquetaLocal(f)}${(() => { const m = (f.suspeita || "").split(" · ").filter(x => !x.startsWith("fora da praça")).join(" · "); return m ? `<span class="geo fora" title="${esc(m)}">⚠ ${esc(m)}</span>` : ""; })()}</span>`; };
 const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
 const listaDe = fid => { const g = S.d.seg.guardas.find(x => x.id === fid); return g && g.locais && g.locais.length >= 3 ? g.locais : S.d.seg.locais; };
 function infoTurno(t, fotos) {
@@ -487,6 +487,52 @@ function segGestor(ro) {
   h += S.segEd === "novo" ? formGuarda(null) : `<button class="primary" style="margin-top:16px;width:100%" data-act="seg-novo">＋ Cadastrar segurança</button>`;
   h += `<p class="note" style="margin-top:12px">📍 Os locais da ronda são de cada segurança: toque no nome, depois em <b>Editar</b>. A cada ronda o app pede 3 locais e vai alternando pela lista.</p>`;
   return h + configBase() + configPanico();
+}
+
+/* ---------- câmera ao vivo do segurança (sem galeria) ---------- */
+async function enviarFotoSeg(blob, g, extra) {
+  const hd = Object.assign({ "content-type": "image/jpeg", "x-chave": S.chave, "x-tipo": S.segTipo, "x-local": S.segLocal }, extra || {});
+  if (g) Object.assign(hd, { "x-lat": String(g.lat), "x-lng": String(g.lng), "x-prec": String(g.precisao) });
+  const r = await fetch("/api/seg/foto", { method: "POST", headers: hd, body: blob });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || "Falha ao enviar a foto.");
+}
+let camStream = null, camLocal = null;
+function fecharCamera() { if (camStream) camStream.getTracks().forEach(t => t.stop()); camStream = null; const el = document.getElementById("camera"); if (el) el.remove(); }
+async function abrirCamera() {
+  const frente = S.segTipo !== "ronda";
+  const titulo = S.segTipo === "entrada" ? "Foto do rosto: chegada" : S.segTipo === "saida" ? "Foto do rosto: saída" : "Foto da ronda";
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return camAlternativa(frente);
+  fecharCamera();
+  const el = document.createElement("div"); el.id = "camera"; el.className = "camera"; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true");
+  el.innerHTML = `<p class="cam-t">${esc(titulo)}</p><video id="cam-v" autoplay playsinline muted></video><p class="cam-s" id="cam-s">Abrindo a câmera e pegando a localização…</p>
+    <div class="cam-b"><button class="ghost" id="cam-x">Cancelar</button><button class="primary big" id="cam-ok" disabled>📸 Tirar foto</button></div>`;
+  document.body.appendChild(el);
+  el.querySelector("#cam-x").onclick = fecharCamera;
+  camLocal = null; pegarLocal(12000).then(g => { camLocal = g; const s = document.getElementById("cam-s"); if (s) s.textContent = g ? `📍 Localização pronta (±${g.precisao} m)` : "⚠ Sem localização: ligue a Localização do celular."; });
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: frente ? "user" : { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false });
+    const v = el.querySelector("#cam-v"); v.srcObject = camStream; await v.play().catch(() => {});
+    const ok = el.querySelector("#cam-ok"); ok.disabled = false;
+    ok.onclick = async () => {
+      ok.disabled = true; ok.textContent = "Enviando…";
+      try {
+        const k = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight)), c = document.createElement("canvas");
+        c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k); const x = c.getContext("2d");
+        x.drawImage(v, 0, 0, c.width, c.height);
+        const g = camLocal, b = S.d.seg && S.d.seg.base, agora = new Date();
+        const linhas = [`${S.d.eu.nome} · ${titulo}${S.segTipo === "ronda" ? " · " + ((document.querySelector(`[data-act="seg-foto"][data-id="${S.segLocal}"]`) || {}).textContent || "").replace("📸", "").trim() : ""}`,
+          agora.toLocaleString("pt-BR", { timeZone: TZ }) + (g ? ` · ${g.lat.toFixed(5)}, ${g.lng.toFixed(5)} ±${g.precisao}m` : " · sem localização") + (g && b ? ` · ${foraDaBase(b, g) ? "FORA " + fmtDist(distM(b, g)) : "na praça"}` : "")];
+        const fs = Math.max(14, Math.round(c.width / 38)); x.fillStyle = "rgba(0,0,0,.6)"; x.fillRect(0, c.height - fs * 3, c.width, fs * 3);
+        x.fillStyle = "#fff"; x.font = `bold ${fs}px sans-serif`; linhas.forEach((l, i) => x.fillText(l, fs / 2, c.height - fs * (1.9 - i * 1.2), c.width - fs));
+        const blob = await new Promise((res, rej) => c.toBlob(bb => bb ? res(bb) : rej(new Error("Não consegui gerar a foto.")), "image/jpeg", 0.75));
+        await enviarFotoSeg(blob, g, { "x-origem": "camera" }); S.err = ""; fecharCamera(); carregar();
+      } catch (e) { ok.disabled = false; ok.textContent = "📸 Tirar foto"; const s = document.getElementById("cam-s"); if (s) s.textContent = "⚠ " + e.message; }
+    };
+  } catch (e) { fecharCamera(); camAlternativa(frente); }
+}
+function camAlternativa(frente) {
+  // Celular sem câmera ao vivo no navegador: usa a câmera do sistema (a foto fica marcada se for antiga)
+  const inp = document.getElementById("foto-seg"); inp.setAttribute("capture", frente ? "user" : "environment"); inp.value = ""; inp.click();
 }
 
 /* ---------- local de trabalho (praça) ---------- */
@@ -751,8 +797,7 @@ document.addEventListener("click", async ev => {
     case "arquivar": S.open.delete(id); return acao("POST", `/api/tarefas/${id}/arquivar`);
     case "desarquivar": S.open.delete(id); return acao("POST", `/api/tarefas/${id}/arquivar`, { desfazer: true });
     case "arq-todas": return acao("POST", "/api/tarefas/arquivar-concluidas");
-    case "seg-foto": { tocar(false); S.segTipo = b.dataset.k; S.segLocal = b.dataset.id || "0"; const inp = document.getElementById("foto-seg");
-      inp.setAttribute("capture", S.segTipo === "ronda" ? "environment" : "user"); inp.value = ""; inp.click(); return; }
+    case "seg-foto": { tocar(false); S.segTipo = b.dataset.k; S.segLocal = b.dataset.id || "0"; return abrirCamera(); }
     case "seg-alarme-ok": tocar(false); S.alarmeVisto = S.alarmeRodada; return draw();
     case "seg-abrir": S.segAberto === id ? S.segAberto = null : S.segAberto = id; return draw();
     case "seg-novo": S.segEd = "novo"; return draw();
@@ -850,13 +895,8 @@ document.addEventListener("change", async ev => {
   if (ev.target.id === "foto-seg") {
     const f0 = ev.target.files[0]; ev.target.value = ""; if (!f0) return;
     S.busy = true; S.err = ""; S.enviandoFoto = 1; draw();
-    try {
-      const [f, g] = await Promise.all([fotoPequena(f0), pegarLocal()]);
-      const hd = { "content-type": "image/jpeg", "x-chave": S.chave, "x-tipo": S.segTipo, "x-local": S.segLocal };
-      if (g) Object.assign(hd, { "x-lat": String(g.lat), "x-lng": String(g.lng), "x-prec": String(g.precisao) });
-      const r = await fetch("/api/seg/foto", { method: "POST", headers: hd, body: f });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || "Falha ao enviar a foto.");
-    } catch (e) { S.err = e.message; }
+    try { const [f, g] = await Promise.all([fotoPequena(f0), pegarLocal()]); await enviarFotoSeg(f, g, { "x-origem": "arquivo", "x-tirada": String(f0.lastModified || "") }); }
+    catch (e) { S.err = e.message; }
     S.busy = false; S.enviandoFoto = null; return carregar();
   }
   if (ev.target.id === "foto-fim") {

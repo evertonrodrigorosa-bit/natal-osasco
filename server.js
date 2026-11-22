@@ -60,6 +60,7 @@ async function migrar() {
   ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
   ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
   ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS precisao INT;
+  ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS suspeita TEXT;
   ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_lat DOUBLE PRECISION;
   ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_lng DOUBLE PRECISION;
   ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_prec INT;
@@ -204,7 +205,7 @@ async function dadosSeg(soFunc) {
   const turnos = await q("SELECT * FROM turnos WHERE func_id = ANY($1) AND (fim IS NULL OR inicio > $2) ORDER BY inicio DESC", [ids, soFunc ? Date.now() - 24 * HORA : desde]);
   const padrao = await locais();
   guardas.forEach(g => { g.locais = listaLocais(g.locais, padrao); });
-  const fotos = await q("SELECT id,turno_id,tipo,rodada,local,local_nome,em,lat,lng,precisao FROM seg_fotos WHERE turno_id = ANY($1) ORDER BY em", [turnos.map(t => t.id)]);
+  const fotos = await q("SELECT id,turno_id,tipo,rodada,local,local_nome,em,lat,lng,precisao,suspeita FROM seg_fotos WHERE turno_id = ANY($1) ORDER BY em", [turnos.map(t => t.id)]);
   return { guardas, turnos, fotos, locais: await locais(), base: await baseSeg(), agora: Date.now() };
 }
 // Local de trabalho dos seguranças (ponto + raio em metros), definido pelo gestor
@@ -246,8 +247,15 @@ app.post("/api/seg/foto", express.raw({ type: () => true, limit: "8mb" }), w(asy
   const num = v => v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null;
   const geo = { lat: num(req.get("x-lat")), lng: num(req.get("x-lng")), precisao: num(req.get("x-prec")) };
   if (geo.lat === null || geo.lng === null) geo.lat = geo.lng = geo.precisao = null;
-  const marcarGeo = async () => { if (geo.lat === null) return;
-    await q("UPDATE seg_fotos SET lat=$1,lng=$2,precisao=$3 WHERE id=(SELECT f.id FROM seg_fotos f JOIN turnos t ON t.id=f.turno_id WHERE t.func_id=$4 ORDER BY f.id DESC LIMIT 1)", [geo.lat, geo.lng, geo.precisao !== null ? Math.round(geo.precisao) : null, req.eu.id]);
+  const marcarGeo = async () => {
+    // Motivos para desconfiar da foto (o gestor vê ao lado da foto)
+    const mot = [], tirada = num(req.get("x-tirada")), base = await baseSeg();
+    if (req.get("x-origem") !== "camera") mot.push(tirada && agora - tirada > 3 * 60e3 ? `foto antiga (de ${new Date(tirada).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })})` : "fora da câmera do app");
+    if (geo.lat === null) mot.push("sem localização");
+    else { if (geo.precisao > 300) mot.push(`local impreciso ±${Math.round(geo.precisao)} m`);
+      if (base && distM(base, geo) - Math.min(geo.precisao || 0, 500) > base.raio) mot.push(`fora da praça ${fmtDist(distM(base, geo))}`); }
+    await q("UPDATE seg_fotos SET lat=$1,lng=$2,precisao=$3,suspeita=$4 WHERE id=(SELECT f.id FROM seg_fotos f JOIN turnos t ON t.id=f.turno_id WHERE t.func_id=$5 ORDER BY f.id DESC LIMIT 1)", [geo.lat, geo.lng, geo.precisao !== null ? Math.round(geo.precisao) : null, mot.join(" · ") || null, req.eu.id]);
+    if (geo.lat === null) return;
     await registrarPosicao(req.eu, geo, tipo === "ronda" ? "na foto da ronda" : tipo === "entrada" ? "na foto de chegada" : "na foto de saída");
   };
   let t = await turnoAberto(req.eu.id);
