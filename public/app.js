@@ -109,7 +109,8 @@ function drawInner() {
   }
   role.hidden = false; role.textContent = (G() ? S.d.eu.nome || "Gestor" : S.d.eu.nome) + " · Sair";
   if (!G() && S.d.eu.seguranca) { stats.innerHTML = `<span>🛡 Segurança · turno ${S.d.eu.turno === "noite" ? "da noite" : "do dia"} ${esc(S.d.eu.turno_ini || "")}–${esc(S.d.eu.turno_fim || "")}</span>`;
-    app.innerHTML = h + segGuarda(); return; }
+    app.innerHTML = h + statusPanico() + segGuarda() + barraPanico(); checarSirene(); return; }
+  h += avisoPanico();
   const ts = ativas(), c = { pend: 0, run: 0, ok: 0, late: 0 };
   ts.forEach(t => { const e = estado(t); if (e === "ok") c.ok++; else if (e === "run" || e === "late-run") c.run++; else c.pend++; if (e.startsWith("late")) c.late++; });
   stats.innerHTML = `<span>${c.pend} a iniciar</span><span>${c.run} em andamento</span><span>${c.ok} concluídas</span>${c.late ? `<span>${c.late} atrasadas</span>` : ""}`;
@@ -120,8 +121,12 @@ function drawInner() {
     h += `<nav class="tabs">${tabs.map(([k, l]) => chip("tab", k, S.tab === k, l)).join("")}</nav>`;
     if (S.tab !== "equipe" && S.tab !== "seg") h += alertas() + botaoPush();
     h += S.tab === "nova" ? wizard() : S.tab === "equipe" ? equipe() : S.tab === "seg" ? segGestor() : acompanhar();
+  } else if (S.d.eu.panico) {
+    if (S.tab !== "seg") S.tab = "tarefas";
+    h += `<nav class="tabs">${chip("tab", "tarefas", S.tab === "tarefas", "Minhas tarefas")}${chip("tab", "seg", S.tab === "seg", "🛡 Seguranças")}</nav>`;
+    h += S.tab === "seg" ? botaoPush() + segGestor(true) : colaborador();
   } else h += colaborador();
-  app.innerHTML = h;
+  app.innerHTML = h; checarSirene();
   const f = app.querySelector("[data-autofocus]"); if (f) f.focus();
 }
 function confirmBtn(act, id, label) {
@@ -403,15 +408,17 @@ function prazoRapido(t) {
 const HORA = 3600e3;
 const hhmm = ms => fmtH(ms);
 const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<a class="sf" href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(alt)}" loading="lazy"><small>${hhmm(f.em)}</small></a>`; };
+const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
+const listaDe = fid => { const g = S.d.seg.guardas.find(x => x.id === fid); return g && g.locais && g.locais.length >= 3 ? g.locais : S.d.seg.locais; };
 function infoTurno(t, fotos) {
   const fim = t.fim ? Number(t.fim) : Date.now(), ini = Number(t.inicio);
   const total = Math.floor((fim - ini) / HORA), fs = fotos.filter(f => f.turno_id === t.id);
   const rondas = [];
-  for (let r = 1; r <= total; r++) rondas.push({ r, hora: ini + r * HORA, fotos: [0, 1, 2].map(l => fs.find(f => f.tipo === "ronda" && f.rodada === r && f.local === l)) });
+  for (let r = 1; r <= total; r++) rondas.push({ r, hora: ini + r * HORA, nomes: locaisDaRonda(listaDe(t.func_id), r), fotos: [0, 1, 2].map(l => fs.find(f => f.tipo === "ronda" && f.rodada === r && f.local === l)) });
   return { ini, total, rondas, entrada: fs.find(f => f.tipo === "entrada"), saida: fs.find(f => f.tipo === "saida"), completas: rondas.filter(x => x.fotos.every(Boolean)).length };
 }
 function segGuarda() {
-  const sg = S.d.seg, t = sg.turnos.find(x => !x.fim), L = sg.locais;
+  const sg = S.d.seg, t = sg.turnos.find(x => !x.fim), L = locaisDaRonda(listaDe(S.d.eu.id), t ? Math.floor((Date.now() - Number(t.inicio)) / HORA) : 1);
   let h = `<div class="seg-nome ${t ? "on" : "off"}"><b>${esc(S.d.eu.nome)}</b><span>${t ? "🟢 Em serviço desde " + hhmm(t.inicio) : "🔴 Fora de serviço"}</span></div>`;
   if (!t) {
     h += `<div class="panel"><p style="margin:0">Chegou no local? Tire uma <b>foto do seu rosto</b> para começar o turno. Seu nome fica verde para o gestor.</p>
@@ -423,26 +430,28 @@ function segGuarda() {
   else {
     const at = it.rondas[r - 1], feita = at.fotos.every(Boolean);
     h += `<div class="panel ronda ${feita ? "ok" : "pend"}"><p class="h3">Ronda das ${hhmm(at.hora)}</p>${feita ? `<p class="ok-txt" style="margin:0">✔ Ronda completa. A próxima é às ${hhmm(at.hora + HORA)}.</p>` : `<p style="margin:0"><b>Fotografe os 3 locais agora.</b></p>`}
-      <div class="locais">${L.map((nome, l) => at.fotos[l] ? `<div class="loc ok">✔ ${esc(nome)}<small>${hhmm(at.fotos[l].em)}</small></div>` : `<button class="primary loc" data-act="seg-foto" data-k="ronda" data-id="${l}">📸 ${esc(nome)}</button>`).join("")}</div></div>`;
+      <div class="locais">${at.nomes.map((nome, l) => at.fotos[l] ? `<div class="loc ok">✔ ${esc(at.fotos[l].local_nome || nome)}<small>${hhmm(at.fotos[l].em)}</small></div>` : `<button class="primary loc" data-act="seg-foto" data-k="ronda" data-id="${l}">📸 ${esc(nome)}</button>`).join("")}</div></div>`;
     const faltaram = it.rondas.slice(0, -1).filter(x => !x.fotos.every(Boolean)).length;
     h += `<p class="note">Rondas completas neste turno: ${it.completas} de ${r}${faltaram ? ` · <span class="late-txt">${faltaram} incompleta${faltaram > 1 ? "s" : ""}</span>` : ""}.</p>`;
     if (!feita && S.alarmeVisto !== r) h += `<div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="al-t"><div class="modal-c alarme"><h2 id="al-t">🔔 Hora da ronda!</h2>
-      <p style="margin:0">Fotografe agora: <b>${esc(L.join(", "))}</b>.</p><button class="primary big" data-act="seg-alarme-ok">Vou fazer a ronda</button></div></div>`;
+      <p style="margin:0">Fotografe agora: <b>${esc(at.nomes.join(", "))}</b>.</p><button class="primary big" data-act="seg-alarme-ok">Vou fazer a ronda</button></div></div>`;
   }
   h += botaoPush();
   h += `<div class="panel" style="margin-top:22px"><p style="margin:0">Terminou o turno? Tire outra <b>foto do rosto</b>. Seu nome fica vermelho para o gestor.</p>
     ${S.confirm === "seg-saida:0" ? `<button class="big stop" data-act="seg-foto" data-k="saida">📸 Confirmar: foto do rosto e encerrar</button>` : `<button class="big" data-act="ask" data-k="seg-saida" data-id="0">Encerrar meu turno</button>`}</div>`;
   return h;
 }
-function segGestor() {
-  const sg = S.d.seg, L = sg.locais;
-  let h = `<p class="note" style="margin-top:12px">🟢 em serviço · 🔴 saiu · ⚪ ainda não chegou. Toque no nome para ver as fotos.</p>`;
+function segGestor(ro) {
+  const sg = S.d.seg;
+  let h = ro ? `<p class="note" style="margin-top:12px">👁 Você vê o que os seguranças fazem, mas não muda nada aqui.</p>` : "";
+  h += listaPanicosHtml();
+  h += `<p class="note" style="margin-top:12px">🟢 em serviço · 🔴 saiu · ⚪ ainda não chegou. Toque no nome para ver as fotos.</p>`;
   for (const [k, titulo] of [["dia", "☀️ Turno do dia"], ["noite", "🌙 Turno da noite"]]) {
     const gs = sg.guardas.filter(g => (g.turno || "dia") === k);
     h += `<section class="grupo"><div class="grupo-h"><h2>${titulo}</h2><span class="cnt">${gs.length}</span></div><div class="list">`;
     if (!gs.length) h += `<p class="note">Ninguém neste turno.</p>`;
     for (const g of gs) {
-      if (S.segEd === g.id) { h += formGuarda(g); continue; }
+      if (!ro && S.segEd === g.id) { h += formGuarda(g); continue; }
       const ts = sg.turnos.filter(t => t.func_id === g.id), aberto = ts.find(t => !t.fim), ult = ts[0];
       let st = "⚪ Ainda não chegou", cls = "";
       if (aberto) {
@@ -450,7 +459,7 @@ function segGestor() {
         st = `🟢 Chegou ${hhmm(aberto.inicio)} · rondas ${it.completas}/${it.total}`; cls = "on";
         if (at && !at.fotos.every(Boolean) && Date.now() - at.hora > 10 * 60e3) st += ` · <span class="late-txt">⚠ ronda das ${hhmm(at.hora)} atrasada</span>`;
       } else if (ult) { st = `🔴 Saiu ${fmtDT(ult.fim)}`; cls = "off"; }
-      h += `<article class="task guarda ${cls}"><div class="task-h" data-act="seg-abrir" data-id="${g.id}"><div class="t"><div class="d">${esc(g.nome)}</div><div class="meta"><span>🕐 ${esc(g.turno_ini || "")}–${esc(g.turno_fim || "")}</span><span>${st}</span></div></div><span class="chev" aria-hidden="true">›</span></div>`;
+      h += `<article class="task guarda ${cls}"><div class="task-h" data-act="seg-abrir" data-id="${g.id}"><div class="t"><div class="d">${esc(g.nome)}</div><div class="meta"><span>🕐 ${esc(g.turno_ini || "")}–${esc(g.turno_fim || "")}</span><span>📍 ${(g.locais || []).length} locais</span><span>${st}</span></div></div><span class="chev" aria-hidden="true">›</span></div>`;
       if (S.segAberto === g.id) {
         h += `<div class="task-b">`;
         if (!ts.length) h += `<p class="note">Nenhum turno nos últimos 3 dias.</p>`;
@@ -458,28 +467,121 @@ function segGestor() {
           const it = infoTurno(t, sg.fotos);
           h += `<div class="turno"><p class="h3">Turno de ${fmtDT(t.inicio)}${t.fim ? " até " + fmtDT(t.fim) : " · em andamento"}</p>
             <div class="sf-row"><span class="sf-l">Chegada</span>${it.entrada ? fotoSeg(it.entrada, "Rosto na chegada") : `<span class="note">sem foto</span>`}</div>`;
-          it.rondas.forEach(x => h += `<div class="sf-row"><span class="sf-l">Ronda ${hhmm(x.hora)}</span>${x.fotos.map((f, l) => f ? fotoSeg(f, L[l]) : `<span class="sf falta">faltou<br>${esc(L[l])}</span>`).join("")}</div>`);
+          it.rondas.forEach(x => h += `<div class="sf-row"><span class="sf-l">Ronda ${hhmm(x.hora)}</span>${x.fotos.map((f, l) => f ? fotoSeg(f, f.local_nome || x.nomes[l]) : `<span class="sf falta">faltou<br>${esc(x.nomes[l])}</span>`).join("")}</div>`);
           if (t.fim) h += `<div class="sf-row"><span class="sf-l">Saída</span>${it.saida ? fotoSeg(it.saida, "Rosto na saída") : `<span class="note">encerrado pelo gestor, sem foto</span>`}</div>`;
-          else h += `<div class="row">${confirmBtn("seg-encerrar", t.id, "Encerrar turno (esqueceu de sair)")}</div>`;
+          else if (!ro) h += `<div class="row">${confirmBtn("seg-encerrar", t.id, "Encerrar turno (esqueceu de sair)")}</div>`;
           h += `</div>`;
         }
         const z = g.telefone ? `https://wa.me/55${g.telefone}?text=${encodeURIComponent("Olá " + g.nome + ", este é o app da segurança da decoração de Natal: " + location.origin + " . Entre digitando o seu celular.")}` : "";
-        h += `<div class="row">${z ? `<a class="zap" href="${z}" target="_blank" rel="noopener">Enviar link</a>` : ""}<button data-act="seg-ed" data-id="${g.id}">Editar</button>${confirmBtn("del-func", g.id, "Remover")}</div></div>`;
+        h += ro ? (g.telefone ? `<div class="row"><a class="zap" href="tel:+55${g.telefone}">📞 Ligar para ${esc(g.nome)}</a></div></div>` : `</div>`)
+          : `<div class="row">${z ? `<a class="zap" href="${z}" target="_blank" rel="noopener">Enviar link</a>` : ""}<button data-act="seg-ed" data-id="${g.id}">Editar</button>${confirmBtn("del-func", g.id, "Remover")}</div></div>`;
       }
       h += `</article>`;
     }
     h += `</div></section>`;
   }
+  if (ro) return h;
   h += S.segEd === "novo" ? formGuarda(null) : `<button class="primary" style="margin-top:16px;width:100%" data-act="seg-novo">＋ Cadastrar segurança</button>`;
-  h += `<div class="panel" style="margin-top:16px"><div class="row" style="justify-content:space-between"><b>📍 Locais da ronda</b><button class="ghost" data-act="seg-locais">${S.segLocais ? "Fechar" : "Mudar"}</button></div>`;
-  h += S.segLocais ? `${L.map((n, i) => `<label class="f">Local ${i + 1}<input id="lc-${i}" maxlength="40" value="${esc(n)}"></label>`).join("")}<button class="primary" data-act="seg-locais-salvar">Salvar locais</button>` : `<p class="note" style="margin:0">${esc(L.join(" · "))}</p>`;
-  return h + `</div>`;
+  h += `<p class="note" style="margin-top:12px">📍 Os locais da ronda são de cada segurança: toque no nome, depois em <b>Editar</b>. A cada ronda o app pede 3 locais e vai alternando pela lista.</p>`;
+  return h + configPanico();
+}
+
+/* ---------- botão de pânico ---------- */
+const PANICO_ATIVO = 60 * 60e3;
+const panicoAberto = p => !p.atendido_em && Date.now() - Number(p.em) < PANICO_ATIVO;
+const linkMapa = p => p.lat !== null && p.lat !== undefined ? `https://maps.google.com/?q=${p.lat},${p.lng}` : "";
+function statusPanico() {
+  const meu = (S.d.panicos || [])[0], ab = meu && Date.now() - Number(meu.em) < PANICO_ATIVO ? meu : null, c = (S.d.centrais || [])[0];
+  let h = "";
+  if (ab) {
+    const txt = encodeURIComponent(`🆘 PÂNICO: ${S.d.eu.nome} precisa de ajuda!` + (linkMapa(ab) ? " Local: " + linkMapa(ab) : ""));
+    h += `<div class="panico-st ${ab.atendido_em ? "ok" : ""}" role="status"><b>${ab.atendido_em ? `✅ ${esc(ab.atendido_por || "A central")} viu o seu pedido às ${hhmm(ab.atendido_em)}. A ajuda está a caminho.` : `🆘 Pedido de ajuda enviado às ${hhmm(ab.em)}. Avisando ${c ? esc(c.nome) : "a central"}…`}</b>
+      ${linkMapa(ab) ? "" : `<small>Sem localização do celular. Diga por telefone onde você está.</small>`}
+      ${c ? `<div class="row"><a class="primary-a" href="tel:+55${c.telefone}">📞 Ligar para ${esc(c.nome)}</a><a class="zap" href="https://wa.me/55${c.telefone}?text=${txt}" target="_blank" rel="noopener">WhatsApp</a></div>` : ""}</div>`;
+  }
+  return h;
+}
+function barraPanico() {
+  return `<div class="panico-bar"><button class="panico-btn" id="btn-panico" aria-label="Botão de pânico: segure por 2 segundos"><span class="enche"></span><span class="txt">🆘 PÂNICO · segure 2 segundos</span></button></div>`;
+}
+let segurando = null;
+function soltarPanico() { if (!segurando) return; clearTimeout(segurando); segurando = null; const b = document.getElementById("btn-panico"); if (b) b.classList.remove("hold"); }
+document.addEventListener("pointerdown", ev => {
+  const b = ev.target.closest && ev.target.closest("#btn-panico"); if (!b || segurando) return;
+  ev.preventDefault(); b.classList.add("hold"); navigator.vibrate && navigator.vibrate(40);
+  segurando = setTimeout(() => { segurando = null; b.classList.remove("hold"); dispararPanico(); }, 2000);
+});
+["pointerup", "pointercancel", "pointerleave"].forEach(t => document.addEventListener(t, soltarPanico, true));
+document.addEventListener("contextmenu", ev => { if (ev.target.closest && ev.target.closest("#btn-panico")) ev.preventDefault(); });
+async function dispararPanico() {
+  navigator.vibrate && navigator.vibrate([300, 100, 300]);
+  try { await api("POST", "/api/seg/panico", {}); S.err = ""; } catch (e) { S.err = "Não consegui avisar pela internet. LIGUE AGORA para a central. (" + e.message + ")"; }
+  carregar();
+  if (navigator.geolocation) navigator.geolocation.getCurrentPosition(
+    async p => { try { await api("POST", "/api/seg/panico", { lat: p.coords.latitude, lng: p.coords.longitude, precisao: Math.round(p.coords.accuracy) }); carregar(); } catch (e) {} },
+    () => {}, { enableHighAccuracy: true, timeout: 6000, maximumAge: 60000 });
+}
+// Aviso de pânico para quem recebe (Alex: tela cheia com sirene) e para os gestores (faixa sem som)
+function avisoPanico() {
+  if (G() ? false : !S.d.eu.panico) return "";
+  const ab = (S.d.panicos || []).filter(panicoAberto);
+  let h = "";
+  if (!G() && S.d.teste) h += `<div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="tst-t"><div class="modal-c alarme"><h2 id="tst-t">🔔 TESTE do alarme de pânico</h2>
+    <p style="margin:0">Isto é <b>só um teste</b> enviado por ${esc(S.d.teste.por)}. Ninguém está em perigo.</p><p style="margin:0">Quando um segurança apertar o pânico, o alarme vai tocar assim. Ouviu?</p>
+    <button class="primary big" data-act="teste-ok">✅ Ouvi o alarme</button></div></div>`;
+  if (!ab.length) return h;
+  if (G()) return h + ab.map(p => `<div class="panico-faixa" role="alert"><b>🆘 PÂNICO: ${esc(p.nome)} pediu ajuda às ${hhmm(p.em)}</b>
+    <div class="row">${linkMapa(p) ? `<a href="${linkMapa(p)}" target="_blank" rel="noopener">📍 Ver no mapa</a>` : `<span>sem localização</span>`}${p.telefone ? `<a href="tel:+55${p.telefone}">📞 Ligar</a>` : ""}<button data-act="atender" data-id="${p.id}">✅ Estou atendendo</button></div></div>`).join("");
+  return h + `<div class="modal panico-modal" role="alertdialog" aria-modal="true" aria-labelledby="pn-t"><div class="modal-c alarme">${ab.map(p => `<div class="pn">
+    <h2 id="pn-t">🆘 PÂNICO: ${esc(p.nome)}</h2><p style="margin:0">Pediu ajuda às <b>${hhmm(p.em)}</b>.${linkMapa(p) ? ` Precisão do local: ${p.precisao ? "uns " + p.precisao + " m" : "não informada"}.` : " O celular dele não mandou a localização."}</p>
+    <div class="row">${linkMapa(p) ? `<a class="primary-a" href="${linkMapa(p)}" target="_blank" rel="noopener">📍 Ver no mapa</a>` : ""}${p.telefone ? `<a class="primary-a" href="tel:+55${p.telefone}">📞 Ligar para ${esc(p.nome)}</a>` : ""}</div>
+    <button class="primary big" data-act="atender" data-id="${p.id}">✅ Estou atendendo</button></div>`).join("")}</div></div>`;
+}
+function listaPanicosHtml() {
+  const l = (S.d.panicos || []).filter(p => !panicoAberto(p)).slice(0, 5);
+  if (!l.length) return "";
+  return `<details class="panel" style="margin-top:12px"><summary><b>🆘 Pânicos nas últimas 24 horas (${l.length})</b></summary>${l.map(p => `<p style="margin:6px 0 0">${esc(p.nome)} · ${fmtDT(p.em)}${p.atendido_em ? ` · atendido por ${esc(p.atendido_por)} às ${hhmm(p.atendido_em)}` : " · ninguém marcou que atendeu"}${linkMapa(p) ? ` · <a href="${linkMapa(p)}" target="_blank" rel="noopener">mapa</a>` : ""}</p>`).join("")}</details>`;
+}
+function configPanico() {
+  const cs = S.d.centrais || [], zs = S.d.zap || [], ts = S.d.testes || [];
+  let h = `<section class="grupo"><div class="grupo-h"><h2>🆘 Quem ouve o alarme do pânico</h2><span class="cnt">${cs.length}</span></div><div class="panel">
+    <p class="note" style="margin:0">Quando um segurança segura o botão de pânico, o alarme toca no celular destas pessoas. Elas também veem os seguranças, sem poder mudar nada, e recebem tarefas normalmente.</p>`;
+  for (const c of cs) {
+    const t = [...ts].reverse().find(x => x.para === c.id);
+    h += `<div class="p"><span>${esc(c.nome)}<br><small class="note">${esc(fmtTel(c.telefone))}${t ? ` · teste ${t.ok ? `<span class="ok-txt">✔ ouviu às ${hhmm(t.ok)}</span>` : `enviado às ${hhmm(t.em)}, esperando`}` : ""}</small></span>
+      <a class="zap" href="https://wa.me/55${c.telefone}?text=${encodeURIComponent("Olá " + c.nome + ", você vai receber o alarme do botão de pânico dos seguranças. Entre no app: " + location.origin + " digitando o seu celular e toque em Ativar avisos.")}" target="_blank" rel="noopener">Enviar link</a>
+      <button data-act="testar-alarme" data-id="${c.id}">🔔 Testar alarme</button>${confirmBtn("del-central", c.id, "Tirar")}</div>`;
+  }
+  h += `<div class="grid2" style="margin-top:8px"><label class="f">Nome<input id="ct-nome" maxlength="60"></label><label class="f">Celular com DDD<input id="ct-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label></div>
+    <button data-act="add-central">＋ Adicionar</button></div></section>`;
+  h += `<section class="grupo"><div class="grupo-h"><h2>📲 Pânico no WhatsApp dos gestores</h2><span class="cnt">${zs.length}</span></div><div class="panel">
+    <p class="note" style="margin:0">Os gestores recebem uma mensagem no WhatsApp (sem alarme) quando alguém aperta o pânico. É grátis, mas cada gestor precisa liberar uma vez no próprio celular:</p>
+    <ol class="passos"><li>Salve nos contatos o número <b>+34 644 66 32 62</b>.</li><li>Mande para ele no WhatsApp: <b>I allow callmebot to send me messages</b></li><li>Ele responde com uma <b>APIKEY</b> (um número). Coloque aqui embaixo.</li></ol>`;
+  for (const z of zs) h += `<div class="p"><span>📲 ${esc(z.nome)}<br><small class="note">${esc(fmtTel(z.telefone))}</small></span>${confirmBtn("del-zap", z.telefone, "Tirar")}</div>`;
+  h += `<div class="grid3"><label class="f">Nome<input id="zp-nome" maxlength="60" value="${esc(zs.length ? "" : S.d.eu.nome || "")}"></label><label class="f">Celular<input id="zp-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label><label class="f">APIKEY<input id="zp-key" inputmode="numeric" maxlength="20"></label></div>
+    <button data-act="add-zap">Salvar e mandar mensagem de teste</button></div></section>`;
+  return h;
+}
+// Sirene: toca sem parar enquanto houver pânico sem atendimento (ou um teste) para quem recebe o pânico
+let sirene = null;
+function checarSirene() {
+  const quer = S.d && !G() && S.d.eu.panico && ((S.d.panicos || []).some(panicoAberto) || !!S.d.teste);
+  if (!quer) { if (sirene) { clearInterval(sirene); sirene = null; } return; }
+  if (sirene) return;
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume && audio.resume(); } catch (e) { return; }
+  const uivo = () => { try { const o = audio.createOscillator(), g = audio.createGain(), t0 = audio.currentTime; o.type = "sawtooth";
+    o.frequency.setValueAtTime(650, t0); o.frequency.linearRampToValueAtTime(1500, t0 + .7); o.frequency.linearRampToValueAtTime(650, t0 + 1.4);
+    g.gain.setValueAtTime(.35, t0); g.gain.setValueAtTime(.35, t0 + 1.35); g.gain.linearRampToValueAtTime(.001, t0 + 1.45);
+    o.connect(g); g.connect(audio.destination); o.start(t0); o.stop(t0 + 1.45); navigator.vibrate && navigator.vibrate([700, 200, 700]); } catch (e) {} };
+  uivo(); sirene = setInterval(uivo, 1500);
 }
 function formGuarda(g) {
   return `<div class="panel"><p class="h3">${g ? "Editar segurança" : "Novo segurança"}</p><div class="grid2"><label class="f">Nome<input id="sg-nome" maxlength="60" value="${esc(g ? g.nome : "")}" data-autofocus></label>
     <label class="f">Celular com DDD<input id="sg-tel" type="tel" inputmode="numeric" value="${esc(g ? fmtTel(g.telefone) : "")}" placeholder="11 98765-4321"></label></div>
     <div class="grid3"><label class="f">Turno<select id="sg-turno"><option value="dia" ${!g || g.turno !== "noite" ? "selected" : ""}>☀️ Dia</option><option value="noite" ${g && g.turno === "noite" ? "selected" : ""}>🌙 Noite</option></select></label>
     <label class="f">Entrada<input id="sg-ini" type="time" value="${esc(g ? g.turno_ini : "07:00")}"></label><label class="f">Saída<input id="sg-fim" type="time" value="${esc(g ? g.turno_fim : "19:00")}"></label></div>
+    <label class="f">Locais da ronda (um por linha, mínimo 3)<textarea id="sg-locais" rows="6" placeholder="Portão principal&#10;Árvore da praça&#10;Palco&#10;Estacionamento">${esc((g && g.locais ? g.locais : S.d.seg.locais).join("\n"))}</textarea></label>
+    <p class="note">A cada ronda o app pede 3 locais da lista, alternando. Ex.: com 6 locais, numa ronda são os 3 primeiros e na seguinte os outros 3.</p>
     <div class="row"><button class="primary" data-act="seg-salvar">Salvar</button><button data-act="seg-cancel">Cancelar</button></div></div>`;
 }
 // Alarme dentro do app (toca enquanto o app está aberto)
@@ -618,11 +720,18 @@ document.addEventListener("click", async ev => {
     case "seg-novo": S.segEd = "novo"; return draw();
     case "seg-ed": S.segEd = id; return draw();
     case "seg-cancel": S.segEd = null; return draw();
-    case "seg-salvar": { const body = { id: S.segEd === "novo" ? null : S.segEd, nome: val("sg-nome"), telefone: val("sg-tel"), turno: val("sg-turno"), turno_ini: val("sg-ini"), turno_fim: val("sg-fim") };
+    case "seg-salvar": { const body = { id: S.segEd === "novo" ? null : S.segEd, nome: val("sg-nome"), telefone: val("sg-tel"), turno: val("sg-turno"), turno_ini: val("sg-ini"), turno_fim: val("sg-fim"), locais: val("sg-locais").split("\n") };
       try { S.busy = true; await api("POST", "/api/seg/guardas", body); S.segEd = null; S.err = ""; } catch (e) { S.err = e.message; } S.busy = false; return carregar(); }
     case "seg-locais": S.segLocais = !S.segLocais; return draw();
     case "seg-locais-salvar": S.segLocais = false; return acao("POST", "/api/seg/locais", { locais: [val("lc-0"), val("lc-1"), val("lc-2")] });
     case "seg-encerrar": return acao("POST", `/api/seg/turnos/${id}/encerrar`);
+    case "atender": return acao("POST", `/api/panicos/${id}/atender`);
+    case "teste-ok": return acao("POST", "/api/teste-alarme/ok");
+    case "testar-alarme": try { const r = await api("POST", `/api/seg/centrais/${id}/testar`); S.err = r.celulares ? "" : "Teste criado, mas essa pessoa ainda não ativou os avisos no celular. Ela só vai ouvir com o app aberto. Peça para entrar e tocar em Ativar avisos."; } catch (e) { S.err = e.message; } return carregar();
+    case "add-central": return acao("POST", "/api/seg/centrais", { nome: val("ct-nome"), telefone: val("ct-tel") });
+    case "del-central": return acao("POST", `/api/seg/centrais/${id}/remover`);
+    case "add-zap": try { S.busy = true; const r = await api("POST", "/api/seg/zap", { nome: val("zp-nome"), telefone: val("zp-tel"), apikey: val("zp-key") }); S.err = r.aviso || ""; } catch (e) { S.err = e.message; } S.busy = false; return carregar();
+    case "del-zap": return acao("POST", "/api/seg/zap/remover", { telefone: b.dataset.id });
     case "ver-alertas": S.tab = "acompanhar"; draw(); window.scrollTo({ top: 0 }); return;
     case "del-modelo": return acao("DELETE", "/api/modelos/" + id);
     case "ir-tarefa": S.tab = "acompanhar"; S.fStatus = "todas"; S.fPrio = "todas"; S.fPessoa = ""; S.open.add(id); draw();
