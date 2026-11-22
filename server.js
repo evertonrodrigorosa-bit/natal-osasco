@@ -76,6 +76,12 @@ async function migrar() {
       ON CONFLICT(telefone) DO UPDATE SET panico=true`, [crypto.randomBytes(12).toString("base64url"), Date.now()]);
     await q("INSERT INTO config(chave,valor) VALUES('seed_alex','1') ON CONFLICT DO NOTHING");
   }
+  // Alex tinha sido cadastrado como segurança: ele é colaborador comum (tarefas + visão da segurança + alarme do pânico)
+  if (!(await q("SELECT 1 FROM config WHERE chave='seed_alex2'")).length) {
+    await q("UPDATE funcionarios SET seguranca=false, gestor=false, panico=true WHERE telefone='11987997850'");
+    await q("UPDATE turnos SET fim=COALESCE(fim,$1) WHERE fim IS NULL AND func_id=(SELECT id FROM funcionarios WHERE telefone='11987997850')", [Date.now()]);
+    await q("INSERT INTO config(chave,valor) VALUES('seed_alex2','1') ON CONFLICT DO NOTHING");
+  }
   // Leva as tarefas antigas (um responsável) para o novo formato, uma vez só
   await q(`
   INSERT INTO tarefa_pessoas(tarefa_id,func_id,ciente,inicio,fim)
