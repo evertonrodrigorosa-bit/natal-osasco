@@ -544,7 +544,7 @@ function listaPanicosHtml() {
   return `<details class="panel" style="margin-top:12px"><summary><b>🆘 Pânicos nas últimas 24 horas (${l.length})</b></summary>${l.map(p => `<p style="margin:6px 0 0">${esc(p.nome)} · ${fmtDT(p.em)}${p.atendido_em ? ` · atendido por ${esc(p.atendido_por)} às ${hhmm(p.atendido_em)}` : " · ninguém marcou que atendeu"}${linkMapa(p) ? ` · <a href="${linkMapa(p)}" target="_blank" rel="noopener">mapa</a>` : ""}</p>`).join("")}</details>`;
 }
 function configPanico() {
-  const cs = S.d.centrais || [], zs = S.d.zap || [], ts = S.d.testes || [];
+  const cs = S.d.centrais || [], ts = S.d.testes || [];
   let h = `<section class="grupo"><div class="grupo-h"><h2>🆘 Quem ouve o alarme do pânico</h2><span class="cnt">${cs.length}</span></div><div class="panel">
     <p class="note" style="margin:0">Quando um segurança segura o botão de pânico, o alarme toca no celular destas pessoas. Elas também veem os seguranças, sem poder mudar nada, e recebem tarefas normalmente.</p>`;
   for (const c of cs) {
@@ -555,12 +555,6 @@ function configPanico() {
   }
   h += `<div class="grid2" style="margin-top:8px"><label class="f">Nome<input id="ct-nome" maxlength="60"></label><label class="f">Celular com DDD<input id="ct-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label></div>
     <button data-act="add-central">＋ Adicionar</button></div></section>`;
-  h += `<section class="grupo"><div class="grupo-h"><h2>📲 Pânico para os gestores</h2><span class="cnt">${zs.length}</span></div><div class="panel">
-    <p class="note" style="margin:0">Os gestores já recebem o pânico como <b>aviso no celular, sem som</b> (é só ter tocado em "Ativar avisos" no app). O WhatsApp é um extra opcional: o serviço grátis (CallMeBot) está lotado agora e prometeu um número novo em alguns dias. Quando abrir, é só:</p>
-    <ol class="passos"><li>Salve nos contatos o número <b>+34 644 66 32 62</b>.</li><li>Mande para ele no WhatsApp: <b>I allow callmebot to send me messages</b></li><li>Ele responde com uma <b>APIKEY</b> (um número). Coloque aqui embaixo.</li></ol>`;
-  for (const z of zs) h += `<div class="p"><span>📲 ${esc(z.nome)}<br><small class="note">${esc(fmtTel(z.telefone))}</small></span>${confirmBtn("del-zap", z.telefone, "Tirar")}</div>`;
-  h += `<div class="grid3"><label class="f">Nome<input id="zp-nome" maxlength="60" value="${esc(zs.length ? "" : S.d.eu.nome || "")}"></label><label class="f">Celular<input id="zp-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label><label class="f">APIKEY<input id="zp-key" inputmode="numeric" maxlength="20"></label></div>
-    <button data-act="add-zap">Salvar e mandar mensagem de teste</button></div></section>`;
   return h;
 }
 // Sirene: toca sem parar enquanto houver pânico sem atendimento (ou um teste) para quem recebe o pânico
@@ -737,8 +731,6 @@ document.addEventListener("click", async ev => {
     case "testar-alarme": try { const r = await api("POST", `/api/seg/centrais/${id}/testar`); S.err = r.celulares ? "" : "Teste criado, mas essa pessoa ainda não ativou os avisos no celular. Ela só vai ouvir com o app aberto. Peça para entrar e tocar em Ativar avisos."; } catch (e) { S.err = e.message; } return carregar();
     case "add-central": return acao("POST", "/api/seg/centrais", { nome: val("ct-nome"), telefone: val("ct-tel") });
     case "del-central": return acao("POST", `/api/seg/centrais/${id}/remover`);
-    case "add-zap": try { S.busy = true; const r = await api("POST", "/api/seg/zap", { nome: val("zp-nome"), telefone: val("zp-tel"), apikey: val("zp-key") }); S.err = r.aviso || ""; } catch (e) { S.err = e.message; } S.busy = false; return carregar();
-    case "del-zap": return acao("POST", "/api/seg/zap/remover", { telefone: b.dataset.id });
     case "ver-alertas": S.tab = "acompanhar"; draw(); window.scrollTo({ top: 0 }); return;
     case "del-modelo": return acao("DELETE", "/api/modelos/" + id);
     case "ir-tarefa": S.tab = "acompanhar"; S.fStatus = "todas"; S.fPrio = "todas"; S.fPessoa = ""; S.open.add(id); draw();

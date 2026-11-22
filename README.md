@@ -13,7 +13,7 @@ App web (PWA) para repassar e acompanhar as tarefas da decoração de Natal de O
 - Locais de ronda por segurança (lista própria, mínimo 3); a cada ronda o app pede 3, alternando pela lista.
 - Botão de pânico do segurança (segurar 2 segundos): manda a localização do celular, toca uma sirene em tela cheia para quem recebe o pânico (Alex, 11 98799-7850, já cadastrado) até alguém tocar "Estou atendendo"; o segurança vê que foi atendido e tem atalhos para ligar e mandar WhatsApp.
 - Quem recebe o pânico vê os seguranças só para consulta (não muda nada) e recebe tarefas normalmente. O gestor cadastra essas pessoas e pode mandar um "Testar alarme".
-- Gestores recebem o pânico no WhatsApp, sem alarme, pelo CallMeBot (grátis): cada um salva +34 644 66 32 62, manda "I allow callmebot to send me messages" e coloca a APIKEY na aba Segurança.
+- Gestores recebem o pânico como aviso no celular, sem som.
 - `.github/workflows/manter-acordado.yml` acessa `/ping` a cada 5 minutos para o Render grátis não dormir (assim o alarme da ronda sai de madrugada).
 - Tarefas antigas (um responsável, setores, subtarefas) são migradas sozinhas para o novo formato na primeira subida.
 
