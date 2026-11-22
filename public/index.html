@@ -194,6 +194,21 @@ button.arq-btn{background:var(--gold-bg);border:2px solid var(--gold);color:var(
 .loc{min-height:56px;font-size:1.05rem;display:flex;align-items:center;justify-content:space-between;gap:8px}
 div.loc{padding:8px 14px;border-radius:10px;background:var(--ok-bg);color:var(--ok);font-weight:700}
 div.loc small{font-weight:500}
+.panico-bar{position:fixed;left:0;right:0;bottom:0;z-index:7;padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));background:var(--bg)}
+.panico-btn{position:relative;overflow:hidden;width:100%;min-height:64px;border:0;border-radius:var(--r);background:#b3001b;color:#fff;font-size:1.15rem;font-weight:800;letter-spacing:.02em;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;box-shadow:0 4px 14px rgba(179,0,27,.4)}
+.panico-btn .enche{position:absolute;inset:0;width:0;background:rgba(255,255,255,.35)} .panico-btn .txt{position:relative}
+.panico-btn.hold .enche{width:100%;transition:width 2s linear}
+.panico-st{margin-top:14px;padding:12px 14px;border-radius:var(--r);background:#ffe3e3;color:#7a0010;border:2px solid #b3001b;display:flex;flex-direction:column;gap:8px}
+.panico-st.ok{background:var(--run-bg);color:var(--fg);border-color:var(--run)}
+.primary-a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 14px;border-radius:10px;background:#b3001b;color:#fff;font-weight:700;text-decoration:none}
+.panico-faixa{margin-top:12px;padding:12px 14px;border-radius:var(--r);background:#b3001b;color:#fff;display:flex;flex-direction:column;gap:8px}
+.panico-faixa a{color:#fff;font-weight:700} .panico-faixa button{background:#fff;color:#b3001b;border-color:#fff;font-weight:700}
+.panico-modal{background:rgba(179,0,27,.85);animation:pisca 1s steps(2) infinite} .panico-modal .pn{display:flex;flex-direction:column;gap:10px}
+.panico-modal .pn+.pn{border-top:1px solid var(--line,#ccc);padding-top:12px}
+@keyframes pisca{50%{background:rgba(60,0,0,.9)}}
+@media (prefers-reduced-motion:reduce){.panico-modal{animation:none}}
+body:has(.panico-bar) #app{padding-bottom:110px}
+.passos{margin:8px 0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .alarme{border:3px solid var(--late)} .alarme h2{color:var(--late)}
 .task.guarda.on{border-left:6px solid var(--ok)} .task.guarda.off{border-left:6px solid var(--late)} .task.guarda{border-left:6px solid var(--line)}
 .task.guarda.on .d{color:var(--ok)} .task.guarda.off .d{color:var(--late)}

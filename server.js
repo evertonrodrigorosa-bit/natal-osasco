@@ -59,12 +59,22 @@ async function migrar() {
   CREATE INDEX IF NOT EXISTS seg_fotos_turno ON seg_fotos(turno_id);
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS gestor BOOLEAN NOT NULL DEFAULT false;
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS locais TEXT;
-  ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS local_nome TEXT;`);
+  ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS local_nome TEXT;
+  -- Botão de pânico
+  ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS panico BOOLEAN NOT NULL DEFAULT false;
+  CREATE TABLE IF NOT EXISTS panicos(id SERIAL PRIMARY KEY, func_id INT NOT NULL REFERENCES funcionarios(id) ON DELETE CASCADE,
+    em BIGINT NOT NULL, lat DOUBLE PRECISION, lng DOUBLE PRECISION, precisao INT, atendido_por TEXT, atendido_em BIGINT);`);
   // Pedido do Bruce em 2026-11-22: Helena entra como gestora pelo celular (feito uma vez só)
   if (!(await q("SELECT 1 FROM config WHERE chave='seed_helena'")).length) {
     await q(`INSERT INTO funcionarios(nome,telefone,token,criado,gestor) VALUES('Helena','11973667211',$1,$2,true)
       ON CONFLICT(telefone) DO UPDATE SET gestor=true, seguranca=false`, [crypto.randomBytes(12).toString("base64url"), Date.now()]);
     await q("INSERT INTO config(chave,valor) VALUES('seed_helena','1') ON CONFLICT DO NOTHING");
+  }
+  // Pedido do Bruce em 2026-11-22: Alex recebe o alarme de pânico dos seguranças (feito uma vez só)
+  if (!(await q("SELECT 1 FROM config WHERE chave='seed_alex'")).length) {
+    await q(`INSERT INTO funcionarios(nome,telefone,token,criado,panico) VALUES('Alex','11987997850',$1,$2,true)
+      ON CONFLICT(telefone) DO UPDATE SET panico=true`, [crypto.randomBytes(12).toString("base64url"), Date.now()]);
+    await q("INSERT INTO config(chave,valor) VALUES('seed_alex','1') ON CONFLICT DO NOTHING");
   }
   // Leva as tarefas antigas (um responsável) para o novo formato, uma vez só
   await q(`
@@ -84,6 +94,7 @@ async function avisarCelular(onde, payload) {
     : onde.func.length ? await q("SELECT * FROM push WHERE func_id = ANY($1)", [onde.func]) : [];
   await Promise.all(subs.map(s => webpush.sendNotification(JSON.parse(s.dados), JSON.stringify(payload), { TTL: 6 * 3600 })
     .catch(e => { if (e.statusCode === 404 || e.statusCode === 410) return q("DELETE FROM push WHERE endpoint=$1", [s.endpoint]); console.error("push", e.statusCode || e.message); })));
+  return subs.length;
 }
 const avisoSeguro = (onde, payload) => avisarCelular(onde, payload).catch(e => console.error("push", e.message));
 
@@ -115,9 +126,9 @@ app.use("/api", async (req, res, next) => {
   try {
     const k = req.get("x-chave") || (req.method === "GET" && typeof req.query.k === "string" ? req.query.k : "");
     if (k && SENHAS.some(x => igual(k, x))) { req.eu = { tipo: "gestor" }; return next(); }
-    if (k) { const [f] = await q("SELECT id,nome,seguranca,gestor,turno,turno_ini,turno_fim,locais FROM funcionarios WHERE token=$1", [k]);
+    if (k) { const [f] = await q("SELECT id,nome,seguranca,gestor,panico,turno,turno_ini,turno_fim,locais FROM funcionarios WHERE token=$1", [k]);
       if (f && f.gestor) { req.eu = { tipo: "gestor", nome: f.nome, gid: f.id }; return next(); }
-      if (f) { req.eu = { tipo: "func", id: f.id, nome: f.nome, seguranca: f.seguranca, turno: f.turno, turno_ini: f.turno_ini, turno_fim: f.turno_fim, locais: f.locais }; return next(); } }
+      if (f) { req.eu = { tipo: "func", id: f.id, nome: f.nome, seguranca: f.seguranca, turno: f.turno, turno_ini: f.turno_ini, turno_fim: f.turno_fim, locais: f.locais, panico: f.panico }; return next(); } }
     res.status(401).json({ erro: "Acesso expirado. Digite o seu celular para entrar de novo." });
   } catch (e) { next(e); }
 });
@@ -136,9 +147,12 @@ app.get("/api/estado", w(async (req, res) => {
       q("SELECT id,tarefa_id,nome,tipo,tamanho,em,autor_id,conclusao FROM anexos ORDER BY id")]);
     const modelos = await q("SELECT * FROM modelos ORDER BY titulo");
     const gestores = await q("SELECT id,nome,telefone FROM funcionarios WHERE gestor ORDER BY nome");
-    return res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos, modelos, seg: await dadosSeg(), gestores });
+    const centrais = await q("SELECT id,nome,telefone FROM funcionarios WHERE panico AND NOT gestor AND NOT seguranca ORDER BY nome");
+    return res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos, modelos, seg: await dadosSeg(), gestores, centrais, panicos: await listaPanicos(),
+      testes: await testesAlarme(), zap: (await zapLista()).map(z => ({ nome: z.nome, telefone: z.telefone })) });
   }
-  if (req.eu.seguranca) return res.json({ eu: req.eu, seg: await dadosSeg(req.eu.id) });
+  if (req.eu.seguranca) return res.json({ eu: req.eu, seg: await dadosSeg(req.eu.id), panicos: await listaPanicos(req.eu.id),
+    centrais: await q("SELECT nome,telefone FROM funcionarios WHERE panico AND NOT seguranca ORDER BY nome") });
   // Colaborador: só as tarefas em que ele está (e os colegas dessas tarefas)
   const ids = (await q("SELECT tp.tarefa_id FROM tarefa_pessoas tp JOIN tarefas t ON t.id=tp.tarefa_id WHERE tp.func_id=$1 AND t.arquivada IS NULL", [req.eu.id])).map(r => r.tarefa_id);
   const [setores, tarefas, pessoas, obs, func, anexos] = await Promise.all([
@@ -146,7 +160,8 @@ app.get("/api/estado", w(async (req, res) => {
     q("SELECT * FROM tarefa_pessoas WHERE tarefa_id = ANY($1)", [ids]), q("SELECT * FROM obs WHERE tarefa_id = ANY($1) ORDER BY em", [ids]),
     q("SELECT id,nome FROM funcionarios ORDER BY nome"),
     q("SELECT id,tarefa_id,nome,tipo,tamanho,em,autor_id,conclusao FROM anexos WHERE tarefa_id = ANY($1) ORDER BY id", [ids])]);
-  res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos });
+  const extra = req.eu.panico ? { panicos: await listaPanicos(), seg: await dadosSeg(), teste: (await testesAlarme()).find(t => t.para === req.eu.id && !t.ok) || null } : {};
+  res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos, ...extra });
 }));
 
 // Segurança
@@ -203,7 +218,7 @@ app.post("/api/seg/foto", express.raw({ type: () => true, limit: "8mb" }), w(asy
 app.get("/api/seg/fotos/:id", w(async (req, res) => {
   const [f] = await q("SELECT f.mime,f.dados,t.func_id FROM seg_fotos f JOIN turnos t ON t.id=f.turno_id WHERE f.id=$1", [req.params.id]);
   if (!f) return res.status(404).send("Foto não encontrada");
-  if (req.eu.tipo !== "gestor" && f.func_id !== req.eu.id) return res.status(403).send("Sem acesso");
+  if (req.eu.tipo !== "gestor" && !req.eu.panico && f.func_id !== req.eu.id) return res.status(403).send("Sem acesso");
   res.set("Content-Type", f.mime); res.set("Cache-Control", "private, max-age=86400"); res.send(f.dados);
 }));
 app.post("/api/seg/guardas", gestor, w(async (req, res) => {
@@ -230,6 +245,91 @@ app.post("/api/seg/locais", gestor, w(async (req, res) => {
 app.post("/api/seg/turnos/:id/encerrar", gestor, w(async (req, res) => {
   await q("UPDATE turnos SET fim=$1 WHERE id=$2 AND fim IS NULL", [Date.now(), req.params.id]); res.json({ ok: 1 });
 }));
+// Botão de pânico: avisa quem recebe o pânico (ex.: Alex) e a gestão
+// Aviso no WhatsApp dos gestores, sem alarme (CallMeBot: grátis, cada gestor ativa no próprio número)
+async function zapLista() { const [r] = await q("SELECT valor FROM config WHERE chave='zap_panico'"); return r ? JSON.parse(r.valor) : []; }
+const zapAvisados = new Set();
+async function zapGestores(texto, chave) {
+  if (chave && zapAvisados.has(chave)) return; if (chave) zapAvisados.add(chave);
+  for (const z of await zapLista()) {
+    const url = `https://api.callmebot.com/whatsapp.php?phone=55${z.telefone}&text=${encodeURIComponent(texto)}&apikey=${encodeURIComponent(z.apikey)}`;
+    fetch(url, { signal: AbortSignal.timeout(20000) }).then(r => { if (!r.ok) console.error("whatsapp", z.nome, r.status); }).catch(e => console.error("whatsapp", z.nome, e.message));
+  }
+}
+app.post("/api/seg/zap", gestor, w(async (req, res) => {
+  const nome = txt(req.body.nome, 60), tel = fone(req.body.telefone), apikey = txt(req.body.apikey, 40);
+  if (!nome || !tel || !apikey) return res.status(400).json({ erro: "Preencha nome, celular e a chave que o CallMeBot mandou." });
+  const l = (await zapLista()).filter(z => z.telefone !== tel); l.push({ nome, telefone: tel, apikey });
+  await q("INSERT INTO config(chave,valor) VALUES('zap_panico',$1) ON CONFLICT(chave) DO UPDATE SET valor=$1", [JSON.stringify(l)]);
+  try {
+    const r = await fetch(`https://api.callmebot.com/whatsapp.php?phone=55${tel}&text=${encodeURIComponent("✅ Teste: você vai receber aqui os avisos de PÂNICO dos seguranças (app Natal Osasco).")}&apikey=${encodeURIComponent(apikey)}`, { signal: AbortSignal.timeout(20000) });
+    const corpo = await r.text();
+    if (!r.ok || /error|invalid|not/i.test(corpo.slice(0, 300)) && !/queued|sent/i.test(corpo)) return res.json({ ok: 1, aviso: "Salvei, mas o teste não confirmou o envio. Confira a chave." });
+  } catch (e) { return res.json({ ok: 1, aviso: "Salvei, mas não consegui testar agora." }); }
+  res.json({ ok: 1 });
+}));
+app.post("/api/seg/zap/remover", gestor, w(async (req, res) => {
+  const l = (await zapLista()).filter(z => z.telefone !== fone(req.body.telefone));
+  await q("INSERT INTO config(chave,valor) VALUES('zap_panico',$1) ON CONFLICT(chave) DO UPDATE SET valor=$1", [JSON.stringify(l)]);
+  res.json({ ok: 1 });
+}));
+async function listaPanicos(soFunc) {
+  return q(`SELECT p.*, f.nome, f.telefone FROM panicos p JOIN funcionarios f ON f.id=p.func_id
+    WHERE p.em > $1 ${soFunc ? "AND p.func_id=$2" : ""} ORDER BY p.em DESC LIMIT 30`, soFunc ? [Date.now() - 24 * HORA, soFunc] : [Date.now() - 24 * HORA]);
+}
+app.post("/api/seg/panico", w(async (req, res) => {
+  if (req.eu.tipo !== "func" || !req.eu.seguranca) return res.status(403).json({ erro: "Só os seguranças usam o botão de pânico." });
+  const n = v => Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : null;
+  const lat = n(req.body.lat), lng = n(req.body.lng);
+  // Evita vários alarmes seguidos do mesmo segurança: reaproveita o aberto dos últimos 2 minutos
+  let [p] = await q("SELECT * FROM panicos WHERE func_id=$1 AND atendido_em IS NULL AND em > $2 ORDER BY em DESC LIMIT 1", [req.eu.id, Date.now() - 120e3]);
+  if (p) { if (lat !== null && p.lat === null) await q("UPDATE panicos SET lat=$1,lng=$2,precisao=$3 WHERE id=$4", [lat, lng, n(req.body.precisao), p.id]); }
+  else [p] = await q("INSERT INTO panicos(func_id,em,lat,lng,precisao) VALUES($1,$2,$3,$4,$5) RETURNING *", [req.eu.id, Date.now(), lat, lng, n(req.body.precisao)]);
+  const quem = (await q("SELECT id FROM funcionarios WHERE panico")).map(r => r.id);
+  const payload = { title: `🆘 PÂNICO: ${req.eu.nome}`, body: `${req.eu.nome} pediu ajuda às ${new Date(Number(p.em)).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}. Abra o app para ver o local e ligar.`, tag: "panico" + p.id, alarme: true };
+  await avisarCelular({ func: quem }, payload).catch(e => console.error("panico push", e.message));
+  const mapa = p.lat !== null && p.lat !== undefined ? `\nLocal: https://maps.google.com/?q=${p.lat},${p.lng}` : (lat !== null ? `\nLocal: https://maps.google.com/?q=${lat},${lng}` : "");
+  zapGestores(`🆘 *PÂNICO*: ${req.eu.nome} pediu ajuda às ${new Date(Number(p.em)).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}.${mapa}\nVeja no app: https://natal-osasco.onrender.com`, p.id);
+  res.json({ ok: 1, id: p.id });
+}));
+app.post("/api/panicos/:id/atender", w(async (req, res) => {
+  if (!(req.eu.tipo === "gestor" || req.eu.panico)) return res.status(403).json({ erro: "Sem acesso." });
+  await q("UPDATE panicos SET atendido_por=COALESCE(atendido_por,$1), atendido_em=COALESCE(atendido_em,$2) WHERE id=$3", [req.eu.nome || "Gestor", Date.now(), req.params.id]);
+  const [p] = await q("SELECT func_id FROM panicos WHERE id=$1", [req.params.id]);
+  if (p) avisoSeguro({ func: [p.func_id] }, { title: "✅ Ajuda a caminho", body: `${req.eu.nome || "A gestão"} viu o seu pedido de ajuda.`, tag: "panico-ok" + req.params.id });
+  res.json({ ok: 1 });
+}));
+app.post("/api/seg/centrais", gestor, w(async (req, res) => {
+  const nome = txt(req.body.nome, 60); if (!nome) return res.status(400).json({ erro: "Informe o nome." });
+  const tel = fone(req.body.telefone); if (!tel) return res.status(400).json({ erro: "Informe o celular com DDD, ex.: 11 98765-4321." });
+  const [ex] = await q("SELECT id,seguranca FROM funcionarios WHERE telefone=$1", [tel]);
+  if (ex && ex.seguranca) return res.status(400).json({ erro: "Esse celular é de um segurança." });
+  if (ex) await q("UPDATE funcionarios SET panico=true WHERE id=$1", [ex.id]);
+  else await q("INSERT INTO funcionarios(nome,telefone,token,criado,panico) VALUES($1,$2,$3,$4,true)", [nome, tel, novoToken(), Date.now()]);
+  res.json({ ok: 1 });
+}));
+app.post("/api/seg/centrais/:id/remover", gestor, w(async (req, res) => {
+  await q("UPDATE funcionarios SET panico=false WHERE id=$1", [req.params.id]);
+  res.json({ ok: 1 });
+}));
+// Teste de alarme: o gestor dispara um alarme de TESTE para quem recebe o pânico e vê quando a pessoa confirmou
+async function testesAlarme() { const [r] = await q("SELECT valor FROM config WHERE chave='testes_alarme'"); return r ? JSON.parse(r.valor) : []; }
+async function salvarTestes(l) { await q("INSERT INTO config(chave,valor) VALUES('testes_alarme',$1) ON CONFLICT(chave) DO UPDATE SET valor=$1", [JSON.stringify(l.slice(-20))]); }
+app.post("/api/seg/centrais/:id/testar", gestor, w(async (req, res) => {
+  const id = Number(req.params.id); const [f] = await q("SELECT id,nome FROM funcionarios WHERE id=$1 AND panico", [id]);
+  if (!f) return res.status(404).json({ erro: "Pessoa não encontrada." });
+  const l = (await testesAlarme()).filter(t => !(t.para === id && !t.ok));
+  const t = { id: Date.now(), para: id, nome: f.nome, por: req.eu.nome || "Gestor", em: Date.now(), ok: null }; l.push(t); await salvarTestes(l);
+  const n = await avisarCelular({ func: [id] }, { title: "🔔 TESTE de alarme do pânico", body: `Isto é só um TESTE enviado por ${t.por}. Abra o app e toque em "Ouvi o alarme".`, tag: "teste" + t.id, alarme: true }).catch(() => 0);
+  res.json({ ok: 1, celulares: n || 0 });
+}));
+app.post("/api/teste-alarme/ok", w(async (req, res) => {
+  if (!req.eu.panico) return res.status(403).json({ erro: "Sem acesso." });
+  const l = await testesAlarme(); for (const t of l) if (t.para === req.eu.id && !t.ok) t.ok = Date.now(); await salvarTestes(l);
+  avisoSeguro({ gestor: true }, { title: "✅ Teste de alarme confirmado", body: `${req.eu.nome} ouviu o alarme de teste.`, tag: "teste-ok" });
+  res.json({ ok: 1 });
+}));
+
 // Alarme de hora em hora (aviso no celular do segurança)
 async function verificarRondas() {
   const abertos = await q("SELECT t.*, f.nome, f.locais FROM turnos t JOIN funcionarios f ON f.id=t.func_id WHERE t.fim IS NULL");
