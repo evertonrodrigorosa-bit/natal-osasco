@@ -70,6 +70,12 @@ async function migrar() {
       ON CONFLICT(telefone) DO UPDATE SET gestor=true, seguranca=false`, [crypto.randomBytes(12).toString("base64url"), Date.now()]);
     await q("INSERT INTO config(chave,valor) VALUES('seed_helena','1') ON CONFLICT DO NOTHING");
   }
+  // Bruce também entra como gestor só digitando o celular (a senha continua valendo)
+  if (!(await q("SELECT 1 FROM config WHERE chave='seed_bruce'")).length) {
+    await q(`INSERT INTO funcionarios(nome,telefone,token,criado,gestor) VALUES('Bruce','44999417211',$1,$2,true)
+      ON CONFLICT(telefone) DO UPDATE SET gestor=true, seguranca=false`, [crypto.randomBytes(12).toString("base64url"), Date.now()]);
+    await q("INSERT INTO config(chave,valor) VALUES('seed_bruce','1') ON CONFLICT DO NOTHING");
+  }
   // Pedido do Bruce em 2026-11-22: Alex recebe o alarme de pânico dos seguranças (feito uma vez só)
   if (!(await q("SELECT 1 FROM config WHERE chave='seed_alex'")).length) {
     await q(`INSERT INTO funcionarios(nome,telefone,token,criado,panico) VALUES('Alex','11987997850',$1,$2,true)
