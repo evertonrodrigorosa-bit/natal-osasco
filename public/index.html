@@ -216,6 +216,8 @@ body:has(.panico-bar) #app{padding-bottom:110px}
 .visor{position:fixed;inset:0;z-index:40;background:#000;display:flex;flex-direction:column;padding:max(10px,env(safe-area-inset-top,0px)) 10px max(10px,env(safe-area-inset-bottom,0px))}
 .visor-b{display:flex;align-items:center;gap:10px;color:#fff;font-size:.9rem;margin-bottom:8px} .visor-b button{flex:none;min-height:48px;font-weight:800}
 .visor img{flex:1;min-height:0;width:100%;object-fit:contain}
+.rel{border-top:1px solid var(--line,#ddd);padding:8px 0} .rel-h{display:flex;flex-direction:column;gap:2px;cursor:pointer} .rel-h span{font-size:.9rem;color:var(--muted)}
+.rel-t{width:100%;border-collapse:collapse;font-size:.82rem;margin-top:6px} .rel-t th,.rel-t td{text-align:left;padding:4px;border-bottom:1px solid var(--line,#eee);vertical-align:top}
 .passos{margin:8px 0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .alarme{border:3px solid var(--late)} .alarme h2{color:var(--late)}
 .task.guarda.on{border-left:6px solid var(--ok)} .task.guarda.off{border-left:6px solid var(--late)} .task.guarda{border-left:6px solid var(--line)}
