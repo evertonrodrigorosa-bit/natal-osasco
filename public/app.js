@@ -64,14 +64,14 @@ function avisar() {
   if (ultimoAviso !== null && ids && ids !== ultimoAviso && n.some(t => !ultimoAviso.split(",").includes(String(t.id)))) {
     try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (e) {}
     const msg = n.length === 1 ? n[0].descricao : n.length + " tarefas novas para você";
-    if ("Notification" in window && Notification.permission === "granted")
+    if ("Notification" in window && Notification.permission === "granted" && !ls.get(chavePush()))
       navigator.serviceWorker && navigator.serviceWorker.ready.then(r => r.showNotification("Tarefa nova", { body: msg, icon: "/icon-192.png", tag: "nova" })).catch(() => {});
   }
   ultimoAviso = ids;
 }
 async function carregar() {
   if (!S.chave) return;
-  try { S.d = await api("GET", "/api/estado"); if (S.err.startsWith("Sem conexão")) S.err = ""; avisar(); }
+  try { S.d = await api("GET", "/api/estado"); if (S.err.startsWith("Sem conexão")) S.err = ""; avisar(); renovarPush(); }
   catch (e) { if (S.chave) S.err = "Sem conexão com o servidor. Tentando de novo…"; }
   render();
 }
@@ -100,6 +100,7 @@ const chip = (act, k, on, label) => `<button data-act="${act}" data-k="${k}" cla
 function drawInner() {
   const role = document.getElementById("role"), stats = document.getElementById("stats");
   let h = S.err ? `<div class="banner">${esc(S.err)}</div>` : "";
+  if (S.enviandoFoto) h += `<div class="aviso"><b>📸 Enviando a foto e terminando a tarefa…</b></div>`;
   if (!S.chave || !S.d) {
     role.hidden = true; stats.innerHTML = "";
     if (S.chave && !S.d) { app.innerHTML = h + `<div class="empty">Carregando…</div>`; return; }
@@ -114,6 +115,7 @@ function drawInner() {
     const tabs = [["nova", "＋ Nova tarefa"], ["acompanhar", "Acompanhar"], ["equipe", "Equipe"]];
     if (!S.tab || !tabs.some(x => x[0] === S.tab)) S.tab = "nova";
     h += `<nav class="tabs">${tabs.map(([k, l]) => chip("tab", k, S.tab === k, l)).join("")}</nav>`;
+    if (S.tab !== "equipe") h += alertas() + botaoPush();
     h += S.tab === "nova" ? wizard() : S.tab === "equipe" ? equipe() : acompanhar();
   } else h += colaborador();
   app.innerHTML = h;
@@ -142,19 +144,20 @@ function colaborador() {
   // Lembrete fixo: sempre visível enquanto houver tarefa aberta
   if (andando.length) {
     h += `<div class="lembrete run" role="status"><b>⏱ Você está trabalhando em:</b>`;
-    andando.sort(ordenar).forEach(t => h += `<div class="lem-row"><span>${PRIO[prio(t)].i} ${esc(t.descricao)} <small>desde ${fmtDT(minha(t).inicio)}</small></span><button class="primary" data-act="terminar" data-id="${t.id}">■ Terminar</button></div>`);
-    h += `<small>Acabou? Aperte TERMINAR agora, para o gestor saber.</small></div>`;
+    andando.sort(ordenar).forEach(t => h += `<div class="lem-row"><span>${PRIO[prio(t)].i} ${esc(t.descricao)} <small>desde ${fmtDT(minha(t).inicio)}</small></span><button class="primary" data-act="terminar" data-id="${t.id}">📸 Terminar</button></div>`);
+    h += `<small>Acabou? Aperte TERMINAR e tire a foto do trabalho pronto.</small></div>`;
   } else if (abertas.length) {
     h += `<div class="lembrete" role="status"><span><b>👉 Lembrete:</b> na hora de começar, abra a tarefa e aperte <b>▶ INICIAR</b>. Quando acabar, aperte <b>■ TERMINAR</b>. É assim que a gestão acompanha o trabalho.</span></div>`;
   }
   // Barra fixa no rodapé: o lembrete fica na tela mesmo rolando a lista
-  if (andando.length === 1) { const t = andando[0]; h += `<div class="barra run"><span>⏱ Em andamento: <b>${esc(t.descricao)}</b></span><button data-act="terminar" data-id="${t.id}">■ Terminar</button></div>`; }
+  if (andando.length === 1) { const t = andando[0]; h += `<div class="barra run"><span>⏱ Em andamento: <b>${esc(t.descricao)}</b></span><button data-act="terminar" data-id="${t.id}">📸 Terminar</button></div>`; }
   else if (andando.length) h += `<div class="barra run"><span>⏱ <b>${andando.length} tarefas em andamento.</b> Aperte TERMINAR em cada uma quando acabar.</span><button data-act="topo">Ver</button></div>`;
   else if (abertas.length) h += `<div class="barra"><span>👉 Começou? Aperte <b>▶ INICIAR</b>. Acabou? Aperte <b>■ TERMINAR</b>.</span></div>`;
   const nv = novas();
   if (nv.length) h += `<div class="aviso"><b>🔔 ${nv.length === 1 ? "Você tem uma tarefa nova" : "Você tem " + nv.length + " tarefas novas"}</b>
     <span>${nv.map(t => PRIO[prio(t)].i + " " + esc(t.descricao)).join(" · ")}</span>
-    <div class="row"><button class="primary" data-act="ver-novas">Ver agora</button>${"Notification" in window && Notification.permission === "default" ? `<button data-act="permitir">Avisar no celular</button>` : ""}</div></div>`;
+    <div class="row"><button class="primary" data-act="ver-novas">Ver agora</button></div></div>`;
+  h += botaoPush();
 
   // Lembrete ao abrir o app
   if (!S.lembreteVisto && abertas.length) h += `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="lem-t"><div class="modal-c">
@@ -203,6 +206,8 @@ function wizard() {
   const resumo = () => `<div class="resumo">${sel.map(id => `<span class="pill">👤 ${esc(nome(id))}</span>`).join("")}${W.prazo && W.passo > 2 ? `<span class="pill">📅 ${fmtD(W.prazo)}</span>` : ""}${W.prioridade && W.passo > 3 ? `<span class="pill p-${W.prioridade}">${PRIO[W.prioridade].i} ${PRIO[W.prioridade].l}</span>` : ""}</div>`;
   if (W.passo === 1) {
     if (!fs.length) return h + `<div class="empty">Ninguém cadastrado ainda. Vá na aba <b>Equipe</b> e cadastre os colaboradores (nome e celular).</div>`;
+    const ms = S.d.modelos || [];
+    if (ms.length) h += `<p class="h3" style="margin-top:14px">⚡ Modelos: toque para usar</p><div class="modelos">${ms.map(m => `<div class="modelo"><button data-act="wz-modelo" data-id="${m.id}"><span class="prio-txt p-${PRIO[m.prioridade] ? m.prioridade : "normal"}">${PRIO[m.prioridade] ? PRIO[m.prioridade].i : "🟡"}</span> ${esc(m.titulo)}<small>${esc(m.pessoas.filter(id => fs.some(f => f.id === id)).map(nome).join(", ") || "escolher pessoas")}</small></button>${confirmBtn("del-modelo", m.id, "✕")}</div>`).join("")}</div><p class="h3" style="margin-top:14px">Ou escolha as pessoas</p>`;
     h += `<p class="note">Toque em uma pessoa ou em várias para criar a tarefa.</p><div class="names">`;
     for (const f of fs) {
       const n = S.d.tarefas.filter(t => { const p = S.d.pessoas.find(x => x.tarefa_id === t.id && x.func_id === f.id); return p && !p.fim; }).length;
@@ -225,7 +230,8 @@ function wizard() {
   h += `<div class="panel"><label class="f">Título<input id="wz-titulo" maxlength="200" value="${esc(W.titulo)}" placeholder="Ex.: Instalar cascata de luz na fachada" data-autofocus></label>
     <label class="f">Detalhes (opcional)<textarea id="wz-det" maxlength="1000" placeholder="Local, material, observações…">${esc(W.detalhes)}</textarea></label>
     <p class="h3">Anexos</p>${W.arquivos.length ? `<div class="arqs">${W.arquivos.map((f, i) => `<span class="pill">📎 ${esc(f.name)} <button class="ghost" data-act="wz-tira" data-id="${i}" aria-label="Tirar ${esc(f.name)}">✕</button></span>`).join("")}</div>` : ""}
-    <label class="upl"><input type="file" id="wz-arq" accept="${ACEITA}" multiple hidden>📎 Anexar arquivo (foto, PDF, Word, Excel)</label></div>`;
+    <label class="upl"><input type="file" id="wz-arq" accept="${ACEITA}" multiple hidden>📎 Anexar arquivo (foto, PDF, Word, Excel)</label>
+    ${W.modelo ? `<p class="note">⚡ Usando o modelo “${esc(W.modelo)}”.</p>` : `<label class="check"><input type="checkbox" id="wz-salvar" ${W.salvarModelo ? "checked" : ""}> Salvar como modelo para usar de novo</label>`}</div>`;
   return h + `<div class="wz-nav"><button class="big" data-act="wz-ir" data-k="3">← Voltar</button><button class="primary big" data-act="wz-criar">✔ Criar tarefa</button></div>`;
 }
 const ACEITA = "image/*,.jpg,.jpeg,.png,.heic,.pdf,application/pdf,.doc,.docx,.xls,.xlsx,.txt";
@@ -280,8 +286,13 @@ function formEditar(t) {
 }
 
 /* ---------- cartão da tarefa ---------- */
+function fotoFim(p, t) {
+  const f = (S.d.anexos || []).filter(x => x.tarefa_id === t.id && x.autor_id === p.func_id && x.conclusao).pop();
+  if (!f) return ""; const url = `/api/anexos/${f.id}?k=${encodeURIComponent(S.chave)}`;
+  return `<a class="foto-fim" href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Foto do trabalho pronto de ${esc(nome(p.func_id))}" loading="lazy"></a>`;
+}
 function situacao(p, t) {
-  if (p.fim) return `<span class="ok-txt">✔ Terminou ${fmtDT(p.fim)}</span>`;
+  if (p.fim) return `<span class="ok-txt">✔ Terminou ${fmtDT(p.fim)}</span>${fotoFim(p, t)}`;
   if (p.inicio) return `<span class="run-txt">▶ Iniciou ${fmtDT(p.inicio)}</span>`;
   if (p.ciente) return `<span>👁 Ciente ${fmtDT(p.ciente)}</span>`;
   return `<span class="late-txt">Ainda não abriu</span>`;
@@ -297,7 +308,7 @@ function card(t) {
   <div class="t"><div class="d">${esc(t.descricao)}</div><div class="meta"><span class="prio-txt p-${pr}">${PRIO[pr].i} ${PRIO[pr].l}</span>
   <span class="${e.startsWith("late") ? "late-txt" : ""}">📅 ${fmtD(t.prazo)}</span>
   <span>${ps.length > 1 ? "👥" : "👤"} ${m ? (outros.length ? "Você + " + esc(outros.map(p => nome(p.func_id)).join(", ")) : "Só você") : esc(ps.map(p => nome(p.func_id)).join(", ") || "Ninguém")}</span>
-  ${G() && e !== "ok" ? `<span class="${cientes < ps.length ? "late-txt" : "ok-txt"}">👁 ${cientes}/${ps.length} ciente${ps.length === 1 ? "" : "s"}</span>` : ""}
+  ${G() && e !== "ok" && ps.length ? `<span class="${cientes < ps.length ? "late-txt" : "ok-txt"}">👁 ${cientes}/${ps.length} ciente${ps.length === 1 ? "" : "s"}</span>` : ""}
   ${m && !m.ciente ? `<span class="late-txt">● Nova · toque para abrir</span>` : ""}
   ${obs.length ? `<span>💬 ${obs.length}</span>` : ""}${anx.length ? `<span>📎 ${anx.length}</span>` : ""}${setor ? `<span>📍 ${esc(setor)}</span>` : ""}</div></div>
   <span class="pill ${pill[0]}">${pill[1]}</span><span class="chev" aria-hidden="true">›</span></div>`;
@@ -306,7 +317,7 @@ function card(t) {
   if (t.detalhes) h += `<p class="det">${esc(t.detalhes)}</p>`;
   if (m) {
     if (!m.inicio) h += `<div class="row"><button class="primary big" data-act="iniciar" data-id="${t.id}">▶ INICIAR TAREFA</button></div><p class="note">Aperte só na hora que for começar o trabalho de verdade.</p>`;
-    else if (!m.fim) h += `<div class="row"><button class="primary big stop" data-act="terminar" data-id="${t.id}">■ TERMINAR TAREFA</button></div><p class="note">Você iniciou ${fmtDT(m.inicio)}. Não esqueça de apertar quando acabar.</p>`;
+    else if (!m.fim) h += `<div class="row"><button class="primary big stop" data-act="terminar" data-id="${t.id}">📸 TERMINAR TAREFA</button></div><p class="note">Você iniciou ${fmtDT(m.inicio)}. Quando acabar, aperte e tire uma foto do trabalho pronto.</p>`;
     else h += `<p class="ok-txt">✔ Você terminou ${fmtDT(m.fim)}.</p>`;
   }
   h += `<p class="h3">${ps.length > 1 ? "Quem está na tarefa" : "Responsável"}</p><div class="quem">`;
@@ -325,7 +336,7 @@ function card(t) {
   for (const x of anx) {
     const url = `/api/anexos/${x.id}?k=${encodeURIComponent(S.chave)}`;
     h += `<div class="anx">${x.tipo.startsWith("image/") ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${esc(x.nome)}" loading="lazy"></a>`
-      : `<a class="pdf" href="${url}" target="_blank" rel="noopener">📄 ${esc(x.nome)}</a>`}${x.autor_id ? `<small class="note">por ${esc(nome(x.autor_id))}</small>` : ""}${G() ? confirmBtn("del-anx", x.id, "Apagar") : ""}</div>`;
+      : `<a class="pdf" href="${url}" target="_blank" rel="noopener">📄 ${esc(x.nome)}</a>`}${x.autor_id ? `<small class="note">${x.conclusao ? "📸 pronto · " : ""}por ${esc(nome(x.autor_id))}</small>` : ""}${G() ? confirmBtn("del-anx", x.id, "Apagar") : ""}</div>`;
   }
   if (!anx.length) h += `<p class="note">Nenhum arquivo.</p>`;
   h += `</div><label class="upl"><input type="file" accept="${ACEITA}" multiple data-upl="${t.id}" hidden>📎 Anexar arquivo</label>`;
@@ -346,6 +357,59 @@ function card(t) {
   if (G()) h += `<div class="row"><button data-act="et" data-id="${t.id}">Editar</button>${confirmBtn("del-task", t.id, "Excluir")}</div>`;
   return h + `</div></article>`;
 }
+
+/* ---------- alertas de atraso (gestor) ---------- */
+function alertas() {
+  const daqui = new Date(Date.now() + 2 * 3600e3).toLocaleString("sv-SE", { timeZone: TZ }).slice(0, 16).replace(" ", "T");
+  const abertas = S.d.tarefas.filter(aberta);
+  const vencidas = abertas.filter(t => atrasado(t.prazo)).sort(ordenar);
+  const semInicio = abertas.filter(t => !atrasado(t.prazo) && t.prazo && t.prazo.includes("T") && t.prazo <= daqui && pessoasDe(t).some(p => !p.inicio)).sort(ordenar);
+  if (!vencidas.length && !semInicio.length) return "";
+  if (S.tab === "nova") return `<button class="alerta curto" data-act="ver-alertas"><b class="al-t">🚨 ${[vencidas.length ? (vencidas.length === 1 ? "1 atrasada" : vencidas.length + " atrasadas") : "", semInicio.length ? semInicio.length + " vencendo sem iniciar" : ""].filter(Boolean).join(" · ")}</b><small>Toque para ver</small></button>`;
+  const linha = (t, txt) => `<button class="al-item" data-act="ir-tarefa" data-id="${t.id}"><span>${PRIO[prio(t)].i} <b>${esc(t.descricao)}</b></span><small>${txt}</small></button>`;
+  let h = `<div class="alerta" role="alert"><b class="al-t">🚨 Atenção</b>`;
+  if (vencidas.length) {
+    h += `<p class="h3">${vencidas.length === 1 ? "1 tarefa atrasada" : vencidas.length + " tarefas atrasadas"}</p>`;
+    vencidas.slice(0, 6).forEach(t => h += linha(t, `venceu ${fmtD(t.prazo)} · falta: ${esc(pessoasDe(t).filter(p => !p.fim).map(p => nome(p.func_id) + (p.inicio ? "" : " (não iniciou)")).join(", "))}`));
+  }
+  if (semInicio.length) {
+    h += `<p class="h3">Vence em até 2 horas e ainda não iniciou</p>`;
+    semInicio.slice(0, 6).forEach(t => h += linha(t, `entrega ${fmtD(t.prazo)} · ${esc(pessoasDe(t).filter(p => !p.inicio).map(p => nome(p.func_id)).join(", "))}`));
+  }
+  return h + `</div>`;
+}
+
+/* ---------- avisos no celular ---------- */
+const temPush = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const chavePush = () => "push_" + (G() ? "gestor" : EU());
+function botaoPush() {
+  if (temPush() && Notification.permission === "granted" && ls.get(chavePush())) return "";
+  if (temPush() && Notification.permission === "denied") return `<p class="note push-n">🔕 Os avisos no celular estão bloqueados. Para ligar, libere as notificações deste site nas configurações do navegador.</p>`;
+  if (!temPush()) {
+    const ios = /iPhone|iPad/.test(navigator.userAgent);
+    return ios ? `<p class="note push-n">🔔 No iPhone, para receber avisos: toque em Compartilhar e depois em <b>Adicionar à Tela de Início</b>, e abra o app por lá.</p>` : "";
+  }
+  return `<div class="push"><span>🔔 Receba as tarefas novas${G() ? " e quem terminou" : " e o aviso de prazo"} direto no celular.</span><button class="primary" data-act="push">Ativar avisos</button></div>`;
+}
+function b64(s) { const p = "=".repeat((4 - s.length % 4) % 4), r = atob((s + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(r, c => c.charCodeAt(0)); }
+async function assinarPush(teste) {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) { const { chave } = await api("GET", "/api/push/chave"); sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(chave) }); }
+  await api("POST", "/api/push/assinar", sub.toJSON());
+  ls.set(chavePush(), "1");
+  if (teste) await api("POST", "/api/push/teste");
+}
+async function ativarPush(b) {
+  b.disabled = true; b.textContent = "Ativando…";
+  try {
+    if (await Notification.requestPermission() !== "granted") throw new Error("Você não permitiu os avisos. Dá para liberar depois nas configurações do navegador.");
+    await assinarPush(true); S.err = "";
+  } catch (e) { S.err = e.message || "Não consegui ligar os avisos neste celular."; }
+  draw();
+}
+let pushOk = false;
+function renovarPush() { if (pushOk || !S.d || !temPush() || Notification.permission !== "granted") return; pushOk = true; assinarPush(false).catch(() => {}); }
 
 /* ---------- ações ---------- */
 const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
@@ -372,6 +436,7 @@ async function enviarArquivos(id, files) {
 function guardarWz() {
   const W = S.wz;
   [["wz-prazo", "prazo"], ["wz-titulo", "titulo"], ["wz-det", "detalhes"]].forEach(([id, k]) => { const el = document.getElementById(id); if (el) W[k] = el.value.trim(); });
+  const sv = document.getElementById("wz-salvar"); if (sv) W.salvarModelo = sv.checked;
 }
 document.addEventListener("input", ev => { if (ev.target.id && ev.target.id.startsWith("wz-") && ev.target.type !== "file") guardarWz(); });
 
@@ -383,14 +448,14 @@ document.addEventListener("click", async ev => {
     case "ver-novas": { const n = novas(); marcarVistas(n.map(t => t.id)); S.fStatus = "abertas"; S.fPrio = "todas"; n.forEach(t => { S.open.add(t.id); marcarCiente(t.id); }); return draw(); }
     case "topo": window.scrollTo({ top: 0, behavior: "smooth" }); return;
     case "lembrete-ok": S.lembreteVisto = true; return draw();
-    case "permitir": try { await Notification.requestPermission(); } catch (e) {} return draw();
+    case "push": return ativarPush(b);
     case "tab": S.tab = b.dataset.k; S.ed = null; if (S.tab === "nova" && S.wz.criada) S.wz = novoWz(); return draw();
     case "fprio": S.fPrio = b.dataset.k; return draw();
     case "fstatus": S.fStatus = b.dataset.k; return draw();
     case "toggle": if (S.open.has(id)) S.open.delete(id); else { S.open.add(id); if (!G()) { marcarVistas([id]); marcarCiente(id); } } return draw();
     case "cancel": S.ed = S.editingObs = null; return draw();
     case "ask": { const k = b.dataset.k + ":" + b.dataset.id; S.confirm = k; draw(); setTimeout(() => { if (S.confirm === k) { S.confirm = null; draw(); } }, 4000); return; }
-    case "sair": S.chave = null; ls.set("chave", null); S.d = null; S.tab = null; S.entrarGestor = false; S.lembreteVisto = false; S.wz = novoWz(); return draw();
+    case "sair": S.chave = null; ls.set("chave", null); S.d = null; S.tab = null; S.entrarGestor = false; S.lembreteVisto = false; S.wz = novoWz(); pushOk = false; return draw();
     case "ir-gestor": S.entrarGestor = true; return draw();
     case "voltar": S.entrarGestor = false; return draw();
     case "login-g": try { const r = await api("POST", "/api/gestor", { senha: val("senha") }); S.chave = r.chave; ls.set("chave", r.chave); S.err = ""; S.entrarGestor = false; carregar(); } catch (e) { S.err = e.message; draw(); } return;
@@ -399,9 +464,16 @@ document.addEventListener("click", async ev => {
     case "wz-pessoa": S.wz.pessoas.has(id) ? S.wz.pessoas.delete(id) : S.wz.pessoas.add(id); return draw();
     case "wz-todos": { const all = S.d.funcionarios.map(f => f.id); S.wz.pessoas = S.wz.pessoas.size === all.length ? new Set() : new Set(all); return draw(); }
     case "wz-rapido": S.wz.prazo = b.dataset.k; { const el = document.getElementById("wz-prazo"); if (el) el.value = b.dataset.k; } return draw();
-    case "wz-ir": { guardarWz(); const p = Number(b.dataset.k);
+    case "wz-modelo": { const m = (S.d.modelos || []).find(x => x.id === id); if (!m) return;
+      S.wz = Object.assign(novoWz(), { pessoas: new Set(m.pessoas.filter(i => S.d.funcionarios.some(f => f.id === i))), prioridade: PRIO[m.prioridade] ? m.prioridade : "normal", titulo: m.titulo, detalhes: m.detalhes || "", modelo: m.titulo });
+      S.wz.passo = S.wz.pessoas.size ? 2 : 1; draw(); window.scrollTo({ top: 0 }); return; }
+    case "ver-alertas": S.tab = "acompanhar"; draw(); window.scrollTo({ top: 0 }); return;
+    case "del-modelo": return acao("DELETE", "/api/modelos/" + id);
+    case "ir-tarefa": S.tab = "acompanhar"; S.fStatus = "todas"; S.fPrio = "todas"; S.fPessoa = ""; S.open.add(id); draw();
+      { const el = document.querySelector(`[data-act="toggle"][data-id="${id}"]`); if (el) el.scrollIntoView({ block: "center" }); } return;
+    case "wz-ir": { guardarWz(); const p = Number(b.dataset.k); if (S.wz.passo === 2 && p === 3) S.wz.passoAntes = 2;
       if (p === 3 && !S.wz.prazo) { S.err = "Escolha a data e a hora da entrega."; return draw(); }
-      S.err = ""; S.wz.passo = p; draw(); window.scrollTo({ top: 0 }); return; }
+      S.err = ""; S.wz.passo = p === 3 && S.wz.modelo && S.wz.passoAntes === 2 ? 4 : p; S.wz.passoAntes = null; draw(); window.scrollTo({ top: 0 }); return; }
     case "wz-prio": S.wz.prioridade = b.dataset.k; S.wz.passo = 4; S.err = ""; draw(); window.scrollTo({ top: 0 }); return;
     case "wz-tira": S.wz.arquivos.splice(id, 1); return draw();
     case "wz-outra": S.wz = novoWz(); return draw();
@@ -409,7 +481,7 @@ document.addEventListener("click", async ev => {
       if (!W.titulo) { S.err = "Escreva o título da tarefa."; draw(); const el = document.getElementById("wz-titulo"); if (el) el.focus(); return; }
       if (S.busy) return; S.busy = true; S.err = ""; b.disabled = true; b.textContent = "Criando…";
       try {
-        const r = await api("POST", "/api/tarefas", { pessoas: [...W.pessoas], prazo: W.prazo, prioridade: W.prioridade, titulo: W.titulo, detalhes: W.detalhes });
+        const r = await api("POST", "/api/tarefas", { pessoas: [...W.pessoas], prazo: W.prazo, prioridade: W.prioridade, titulo: W.titulo, detalhes: W.detalhes, salvarModelo: !W.modelo && !!W.salvarModelo });
         try { await enviarArquivos(r.id, W.arquivos); } catch (e) { S.err = "Tarefa criada, mas um anexo falhou: " + e.message; }
         S.wz = novoWz(); S.wz.criada = r.id;
       } catch (e) { S.err = e.message; }
@@ -423,7 +495,7 @@ document.addEventListener("click", async ev => {
       S.busy = false; return carregar(); }
     case "del-task": S.open.delete(id); return acao("DELETE", "/api/tarefas/" + id);
     case "iniciar": return acao("POST", `/api/tarefas/${id}/iniciar`);
-    case "terminar": return acao("POST", `/api/tarefas/${id}/terminar`);
+    case "terminar": { S.terminando = id; const inp = document.getElementById("foto-fim"); inp.value = ""; inp.click(); return; }
     case "zerar": { const [tid, fid] = b.dataset.id.split("-"); return acao("POST", `/api/tarefas/${tid}/zerar/${fid}`); }
     case "ob": { const el = document.getElementById("ob-" + id); const t = el ? el.value.trim() : ""; if (!t) return; el.value = ""; el.blur(); return acao("POST", `/api/tarefas/${id}/obs`, { texto: t }); }
     case "eo": S.editingObs = id; return draw();
@@ -466,6 +538,18 @@ function reduzir(file0) {
 }
 document.addEventListener("change", async ev => {
   if (ev.target.id === "f-pessoa") { S.fPessoa = ev.target.value; return draw(); }
+  if (ev.target.id === "foto-fim") {
+    const f0 = ev.target.files[0], id = S.terminando; ev.target.value = ""; if (!f0 || !id) return;
+    S.busy = true; S.err = ""; S.enviandoFoto = id; draw();
+    try {
+      const f = await reduzir(f0);
+      if (!f.type.startsWith("image/") || f.type === "image/heic" || f.type === "image/heif") throw new Error("Não consegui ler essa foto. Tire a foto pela câmera do app ou envie em JPG.");
+      const r = await fetch(`/api/tarefas/${id}/anexos`, { method: "POST", headers: { "content-type": f.type, "x-chave": S.chave, "x-nome": encodeURIComponent("pronto-" + f.name), "x-conclusao": "1" }, body: f });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || "Falha ao enviar a foto.");
+      await api("POST", `/api/tarefas/${id}/terminar`);
+    } catch (e) { S.err = e.message; }
+    S.busy = false; S.enviandoFoto = null; S.terminando = null; return carregar();
+  }
   if (ev.target.id === "wz-arq") { guardarWz(); S.wz.arquivos.push(...ev.target.files); ev.target.value = ""; return draw(); }
   const inp = ev.target.closest("input[data-upl]"); if (!inp || !inp.files.length) return;
   const id = inp.dataset.upl, files = [...inp.files]; inp.value = "";
