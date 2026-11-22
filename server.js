@@ -66,6 +66,7 @@ async function migrar() {
   ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_prec INT;
   ALTER TABLE turnos ADD COLUMN IF NOT EXISTS pos_em BIGINT;
   ALTER TABLE turnos ADD COLUMN IF NOT EXISTS fora BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE turnos ADD COLUMN IF NOT EXISTS encerrado_por TEXT;
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS gestor BOOLEAN NOT NULL DEFAULT false;
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS locais TEXT;
   ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS local_nome TEXT;
@@ -322,8 +323,33 @@ app.post("/api/seg/locais", gestor, w(async (req, res) => {
   await q("INSERT INTO config(chave,valor) VALUES('locais_seg',$1) ON CONFLICT(chave) DO UPDATE SET valor=$1", [JSON.stringify(l)]);
   res.json({ ok: 1 });
 }));
+// Data e hora digitadas pelo gestor (horário de São Paulo, sem horário de verão)
+const horaSP = v => { const m = String(v || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/); return m ? Date.parse(`${m[1]}T${m[2]}:00-03:00`) : NaN; };
+// Gestor encerra o turno (ou corrige a hora de saída) quando o segurança errou ou esqueceu
 app.post("/api/seg/turnos/:id/encerrar", gestor, w(async (req, res) => {
-  await q("UPDATE turnos SET fim=$1 WHERE id=$2 AND fim IS NULL", [Date.now(), req.params.id]); res.json({ ok: 1 });
+  const [t] = await q("SELECT * FROM turnos WHERE id=$1", [req.params.id]); if (!t) return res.status(404).json({ erro: "Turno não encontrado." });
+  const fim = req.body.fim ? horaSP(req.body.fim) : Date.now();
+  if (!Number.isFinite(fim)) return res.status(400).json({ erro: "Informe a data e a hora de saída." });
+  if (fim <= Number(t.inicio)) return res.status(400).json({ erro: "A saída precisa ser depois da chegada (" + new Date(Number(t.inicio)).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) + ")." });
+  if (fim > Date.now() + 60e3) return res.status(400).json({ erro: "A saída não pode ser no futuro." });
+  await q("UPDATE turnos SET fim=$1, encerrado_por=$2 WHERE id=$3", [fim, req.eu.nome || "Gestor", t.id]); res.json({ ok: 1 });
+}));
+// Turno aberto por engano: o gestor apaga (com as fotos dele)
+app.post("/api/seg/turnos/:id/apagar", gestor, w(async (req, res) => {
+  await q("DELETE FROM turnos WHERE id=$1", [req.params.id]); res.json({ ok: 1 });
+}));
+// Relatório para pagamento: turnos de cada segurança num período
+app.get("/api/seg/relatorio", gestor, w(async (req, res) => {
+  const de = horaSP((req.query.de || "") + "T00:00"), ate = horaSP((req.query.ate || "") + "T00:00") + 24 * HORA;
+  if (!Number.isFinite(de) || !Number.isFinite(ate) || ate <= de) return res.status(400).json({ erro: "Escolha as datas de início e fim." });
+  const turnos = await q(`SELECT t.id,t.func_id,t.inicio,t.fim,t.encerrado_por,f.nome,f.telefone,f.turno,
+      (SELECT count(*) FROM seg_fotos s WHERE s.turno_id=t.id AND s.tipo='ronda')::int AS fotos_ronda,
+      (SELECT count(*) FROM (SELECT rodada FROM seg_fotos x WHERE x.turno_id=t.id AND x.tipo='ronda' GROUP BY rodada HAVING count(DISTINCT local)=3) z)::int AS rondas_ok,
+      EXISTS(SELECT 1 FROM seg_fotos s WHERE s.turno_id=t.id AND s.tipo='entrada') AS foto_entrada,
+      EXISTS(SELECT 1 FROM seg_fotos s WHERE s.turno_id=t.id AND s.tipo='saida') AS foto_saida,
+      (SELECT count(*) FROM seg_fotos s WHERE s.turno_id=t.id AND s.suspeita IS NOT NULL)::int AS suspeitas
+    FROM turnos t JOIN funcionarios f ON f.id=t.func_id WHERE t.inicio >= $1 AND t.inicio < $2 ORDER BY f.nome, t.inicio`, [de, ate]);
+  res.json({ turnos });
 }));
 // Botão de pânico: avisa quem recebe o pânico (ex.: Alex) e a gestão
 // Aviso no WhatsApp dos gestores, sem alarme (CallMeBot: grátis, cada gestor ativa no próprio número)

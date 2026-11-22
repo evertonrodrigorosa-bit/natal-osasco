@@ -483,8 +483,10 @@ function segGestor(ro) {
           h += `<div class="turno"><p class="h3">Turno de ${fmtDT(t.inicio)}${t.fim ? " até " + fmtDT(t.fim) : " · em andamento"}</p>
             <div class="sf-row"><span class="sf-l">Chegada</span>${it.entrada ? fotoSeg(it.entrada, "Rosto na chegada") : `<span class="note">sem foto</span>`}</div>`;
           it.rondas.forEach(x => h += `<div class="sf-row"><span class="sf-l">Ronda ${hhmm(x.hora)}</span>${x.fotos.map((f, l) => f ? fotoSeg(f, f.local_nome || x.nomes[l]) : `<span class="sf falta">faltou<br>${esc(x.nomes[l])}</span>`).join("")}</div>`);
-          if (t.fim) h += `<div class="sf-row"><span class="sf-l">Saída</span>${it.saida ? fotoSeg(it.saida, "Rosto na saída") : `<span class="note">encerrado pelo gestor, sem foto</span>`}</div>`;
-          else if (!ro) h += `<div class="row">${confirmBtn("seg-encerrar", t.id, "Encerrar turno (esqueceu de sair)")}</div>`;
+          if (t.fim) h += `<div class="sf-row"><span class="sf-l">Saída</span>${it.saida ? fotoSeg(it.saida, "Rosto na saída") : `<span class="note">sem foto</span>`}${t.encerrado_por ? `<span class="note">encerrado/corrigido por ${esc(t.encerrado_por)}</span>` : ""}</div>`;
+          if (!ro) h += S.segFim === t.id ? `<div class="panel"><label class="f">${t.fim ? "Hora certa da saída" : "Hora da saída"}<input id="fim-${t.id}" type="datetime-local" value="${inputDT(t.fim || Date.now())}"></label>
+              <div class="row"><button class="primary" data-act="seg-encerrar" data-id="${t.id}">${t.fim ? "Salvar hora certa" : "Encerrar turno"}</button><button data-act="seg-fim-x">Cancelar</button></div></div>`
+            : `<div class="row">${!t.fim ? `<button class="primary" data-act="seg-fim" data-id="${t.id}">■ Encerrar turno dele</button>` : `<button class="ghost" data-act="seg-fim" data-id="${t.id}">Corrigir hora de saída</button>`}${confirmBtn("seg-apagar", t.id, "Apagar turno (aberto por engano)")}</div>`;
           h += `</div>`;
         }
         const z = g.telefone ? `https://wa.me/55${g.telefone}?text=${encodeURIComponent("Olá " + g.nome + ", este é o app da segurança da decoração de Natal: " + location.origin + " . Entre digitando o seu celular.")}` : "";
@@ -498,7 +500,47 @@ function segGestor(ro) {
   if (ro) return h;
   h += S.segEd === "novo" ? formGuarda(null) : `<button class="primary" style="margin-top:16px;width:100%" data-act="seg-novo">＋ Cadastrar segurança</button>`;
   h += `<p class="note" style="margin-top:12px">📍 Os locais da ronda são de cada segurança: toque no nome, depois em <b>Editar</b>. A cada ronda o app pede 3 locais e vai alternando pela lista.</p>`;
-  return h + configBase() + configPanico();
+  return h + relatorio() + configBase() + configPanico();
+}
+/* ---------- relatório para pagamento ---------- */
+const inputDT = ms => { const d = new Date(Number(ms) - 3 * HORA); return d.toISOString().slice(0, 16); };
+const hoje = () => new Date(Date.now() - 3 * HORA).toISOString().slice(0, 10);
+const fmtHoras = ms => { const m = Math.round(ms / 60e3); return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}`; };
+function resumoRel() {
+  const por = new Map();
+  for (const t of S.rel || []) {
+    const r = por.get(t.func_id) || { id: t.func_id, nome: t.nome, turno: t.turno, turnos: [], ms: 0, abertos: 0, rondas: 0, esperadas: 0, suspeitas: 0 };
+    const fim = t.fim ? Number(t.fim) : null, dur = fim ? fim - Number(t.inicio) : 0;
+    r.turnos.push(t); r.ms += dur; if (!fim) r.abertos++; r.rondas += t.rondas_ok; r.esperadas += fim ? Math.floor(dur / HORA) : 0; r.suspeitas += t.suspeitas;
+    por.set(t.func_id, r);
+  }
+  return [...por.values()];
+}
+function relatorio() {
+  const de = S.relDe || hoje().slice(0, 8) + "01", ate = S.relAte || hoje();
+  let h = `<section class="grupo"><div class="grupo-h"><h2>🧾 Relatório para pagamento</h2></div><div class="panel">
+    <div class="grid2"><label class="f">De<input id="rel-de" type="date" value="${de}"></label><label class="f">Até<input id="rel-ate" type="date" value="${ate}"></label></div>
+    <div class="row"><button class="primary" data-act="rel-gerar">Gerar relatório</button>${S.rel && S.rel.length ? `<button data-act="rel-csv">⬇ Baixar planilha</button>` : ""}</div>`;
+  if (S.rel) {
+    const rs = resumoRel();
+    if (!rs.length) h += `<p class="note">Nenhum turno nesse período.</p>`;
+    for (const r of rs) {
+      h += `<div class="rel"><div class="rel-h" data-act="rel-abrir" data-id="${r.id}"><b>${esc(r.nome)}</b><span>${r.turnos.length} turno${r.turnos.length === 1 ? "" : "s"} · <b>${fmtHoras(r.ms)}</b> · rondas ${r.rondas}/${r.esperadas}${r.abertos ? ` · <span class="late-txt">${r.abertos} sem saída</span>` : ""}${r.suspeitas ? ` · <span class="late-txt">⚠ ${r.suspeitas} foto${r.suspeitas > 1 ? "s" : ""} suspeita${r.suspeitas > 1 ? "s" : ""}</span>` : ""}</span></div>`;
+      if (S.relAberto === r.id) h += `<table class="rel-t"><tr><th>Chegada</th><th>Saída</th><th>Horas</th><th>Rondas</th></tr>${r.turnos.map(t => `<tr><td>${fmtDT(t.inicio)}</td><td>${t.fim ? fmtDT(t.fim) + (t.encerrado_por ? ` <small>(${esc(t.encerrado_por)})</small>` : "") : `<span class="late-txt">sem saída</span>`}</td><td>${t.fim ? fmtHoras(t.fim - t.inicio) : "—"}</td><td>${t.rondas_ok}/${t.fim ? Math.floor((t.fim - t.inicio) / HORA) : "—"}</td></tr>`).join("")}</table>`;
+      h += `</div>`;
+    }
+    if (rs.some(r => r.abertos)) h += `<p class="note">Turnos "sem saída" não entram nas horas. Encerre ou corrija a saída tocando no nome do segurança acima.</p>`;
+  }
+  return h + `</div></section>`;
+}
+function baixarRelatorio() {
+  const q = v => `"${String(v).replace(/"/g, '""')}"`, linhas = [["Nome", "Chegada", "Saída", "Horas", "Horas (decimal)", "Rondas completas", "Rondas esperadas", "Fotos suspeitas", "Encerrado por"].map(q).join(";")];
+  for (const t of S.rel || []) { const dur = t.fim ? t.fim - t.inicio : 0;
+    linhas.push([t.nome, fmtDT(t.inicio), t.fim ? fmtDT(t.fim) : "sem saída", t.fim ? fmtHoras(dur) : "", t.fim ? (dur / HORA).toFixed(2).replace(".", ",") : "", t.rondas_ok, t.fim ? Math.floor(dur / HORA) : "", t.suspeitas, t.encerrado_por || ""].map(q).join(";")); }
+  linhas.push(""); linhas.push([q("TOTAL POR NOME")].join(";"));
+  for (const r of resumoRel()) linhas.push([r.nome, "", "", fmtHoras(r.ms), (r.ms / HORA).toFixed(2).replace(".", ","), r.rondas, r.esperadas, r.suspeitas, ""].map(q).join(";"));
+  const blob = new Blob(["\ufeff" + linhas.join("\r\n")], { type: "text/csv;charset=utf-8" }), u = URL.createObjectURL(blob), l = document.createElement("a");
+  l.href = u; l.download = `relatorio-segurancas-${S.relDe || ""}-a-${S.relAte || ""}.csv`; document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000);
 }
 
 /* ---------- ver foto em tela cheia, com botão de voltar ---------- */
@@ -841,7 +883,14 @@ document.addEventListener("click", async ev => {
       try { S.busy = true; await api("POST", "/api/seg/guardas", body); S.segEd = null; S.err = ""; } catch (e) { S.err = e.message; } S.busy = false; return carregar(); }
     case "seg-locais": S.segLocais = !S.segLocais; return draw();
     case "seg-locais-salvar": S.segLocais = false; return acao("POST", "/api/seg/locais", { locais: [val("lc-0"), val("lc-1"), val("lc-2")] });
-    case "seg-encerrar": return acao("POST", `/api/seg/turnos/${id}/encerrar`);
+    case "seg-fim": S.segFim = id; return draw();
+    case "seg-fim-x": S.segFim = null; return draw();
+    case "seg-encerrar": { const v = val("fim-" + id); S.segFim = null; return acao("POST", `/api/seg/turnos/${id}/encerrar`, { fim: v }); }
+    case "seg-apagar": return acao("POST", `/api/seg/turnos/${id}/apagar`);
+    case "rel-gerar": { const de = val("rel-de"), ate = val("rel-ate"); S.relDe = de; S.relAte = ate;
+      try { S.busy = true; S.rel = (await api("GET", `/api/seg/relatorio?de=${de}&ate=${ate}`)).turnos; S.err = ""; } catch (e) { S.err = e.message; } S.busy = false; return draw(); }
+    case "rel-csv": return baixarRelatorio();
+    case "rel-abrir": S.relAberto = S.relAberto === id ? null : id; return draw();
     case "base-aqui": { b.disabled = true; b.textContent = "Pegando a localização…"; const g = await pegarLocal(15000);
       if (!g) { S.err = "Não consegui pegar a sua localização. Ligue a Localização do celular e permita para este site."; return draw(); }
       if (g.precisao > 150) S.err = `Atenção: a localização veio com margem de ±${g.precisao} m. Se possível, tente de novo ao ar livre.`;
