@@ -76,7 +76,7 @@ async function checarVersao() {
   try {
     const { v } = await (await fetch("/versao", { cache: "no-store" })).json();
     if (!versaoApp) { versaoApp = v; return; }
-    const ocupado = S.busy || document.getElementById("camera") || document.getElementById("visor") || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+    const ocupado = S.busy || Date.now() < (S.arqAte || 0) || document.getElementById("camera") || document.getElementById("visor") || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
     if (v !== versaoApp && !ocupado) location.reload();
   } catch (e) {}
 }
@@ -95,6 +95,7 @@ const msgNova = (fid, t) => `Olá ${nome(fid)}, você tem uma tarefa nova (prior
 /* ---------- render ---------- */
 let pending = false;
 function render() {
+  if (Date.now() < (S.arqAte || 0)) { pending = true; return; }
   const a = document.activeElement;
   if (a && app.contains(a) && (a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && a.type !== "file")) && a.value) { pending = true; return; }
   pending = false; draw();
@@ -421,7 +422,7 @@ function prazoRapido(t) {
 /* ---------- segurança ---------- */
 const HORA = 3600e3;
 const hhmm = ms => fmtH(ms);
-const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<span class="sf-w"><button type="button" class="sf" data-act="ver-foto" data-k="${u}" data-id="${esc(alt)}"><img src="${u}" alt="${esc(alt)}" decoding="async"><small>${f.tipo === "ronda" ? esc(alt) + "<br>" : ""}${hhmm(f.em)}</small></button>${etiquetaLocal(f)}${(() => { const m = (f.suspeita || "").split(" · ").filter(x => !x.startsWith("fora da praça")).join(" · "); return m ? `<span class="geo fora" title="${esc(m)}">⚠ ${esc(m)}</span>` : ""; })()}</span>`; };
+const fotoSeg = (f, alt) => { const u = `/api/seg/fotos/${f.id}?k=${encodeURIComponent(S.chave)}`; return `<span class="sf-w"><button type="button" class="sf" data-act="ver-foto" data-k="${u}" data-id="${esc(alt)}"><img src="${u}" alt="${esc(alt)}"><small>${f.tipo === "ronda" ? esc(alt) + "<br>" : ""}${hhmm(f.em)}</small></button>${etiquetaLocal(f)}${(() => { const m = (f.suspeita || "").split(" · ").filter(x => !x.startsWith("fora da praça")).join(" · "); return m ? `<span class="geo fora" title="${esc(m)}">⚠ ${esc(m)}</span>` : ""; })()}</span>`; };
 const locaisDaRonda = (lista, r) => [0, 1, 2].map(i => lista[((Math.max(r, 1) - 1) * 3 + i) % lista.length]);
 const listaDe = fid => { const g = S.d.seg.guardas.find(x => x.id === fid); return g && g.locais && g.locais.length >= 3 ? g.locais : S.d.seg.locais; };
 function infoTurno(t, fotos) {
@@ -456,6 +457,28 @@ function segGuarda() {
     ${S.confirm === "seg-saida:0" ? `<button class="big stop" data-act="seg-foto" data-k="saida">📸 Confirmar: foto do rosto e encerrar</button>` : `<button class="big" data-act="ask" data-k="seg-saida" data-id="0">Encerrar meu turno</button>`}</div>`;
   return h;
 }
+// Hora prevista de saída: o próximo horário de fim do turno do segurança depois da chegada (sem horário: 12 h)
+function fimPrevisto(t, g) {
+  const ini = Number(t.inicio), m = /^(\d\d):(\d\d)$/.exec((g && g.turno_fim) || "");
+  if (!m) return ini + 12 * HORA;
+  const SP = 3 * HORA, d = new Date(ini - SP); d.setUTCHours(Number(m[1]), Number(m[2]), 0, 0); // horário de Brasília (UTC-3)
+  let f = d.getTime() + SP; while (f <= ini + HORA) f += 24 * HORA; return f;
+}
+function linhasRondas(t, it, g) {
+  let h = "";
+  const agora = Date.now();
+  it.rondas.forEach(x => {
+    const feita = x.fotos.every(Boolean), atual = !t.fim && x.r === it.total;
+    const st = feita ? `<span class="rs ok">✔ feita</span>` : atual ? `<span class="rs agora">⏳ fazendo agora</span>` : `<span class="rs nao">✖ não feita</span>`;
+    h += `<div class="sf-row"><span class="sf-l">Ronda ${hhmm(x.hora)} ${st}</span>${x.fotos.map((f, l) => f ? fotoSeg(f, f.local_nome || x.nomes[l]) : `<span class="sf falta ${atual ? "espera" : ""}">${atual ? "falta" : "faltou"}<br>${esc(x.nomes[l])}</span>`).join("")}</div>`;
+  });
+  if (!t.fim) {
+    const fim = fimPrevisto(t, g), futuras = [];
+    for (let r = it.total + 1; Number(t.inicio) + r * HORA < fim && futuras.length < 24; r++) futuras.push(Number(t.inicio) + r * HORA);
+    if (futuras.length) h += `<div class="sf-row"><span class="sf-l">Ainda faltam ${futuras.length} ronda${futuras.length > 1 ? "s" : ""} até ${hhmm(fim)}</span><span class="rs-fut">${futuras.map(x => `<span>🕒 ${hhmm(x)}</span>`).join("")}</span></div>`;
+  }
+  return h;
+}
 function segGestor(ro) {
   const sg = S.d.seg;
   let h = ro ? `<p class="note" style="margin-top:12px">👁 Você vê o que os seguranças fazem, mas não muda nada aqui.</p>` : "";
@@ -471,7 +494,8 @@ function segGestor(ro) {
       let st = "⚪ Ainda não chegou", cls = "";
       if (aberto) {
         const it = infoTurno(aberto, sg.fotos), at = it.rondas[it.total - 1];
-        st = `🟢 Chegou ${hhmm(aberto.inicio)} · rondas ${it.completas}/${it.total}`; cls = "on";
+        const nao = it.rondas.filter(x => !x.fotos.every(Boolean) && x.r !== it.total).length;
+        st = `🟢 Chegou ${hhmm(aberto.inicio)} · rondas feitas ${it.completas}/${it.total}${nao ? ` · <span class="late-txt">${nao} não feita${nao > 1 ? "s" : ""}</span>` : ""} · próxima ${hhmm(Number(aberto.inicio) + (it.total + 1) * HORA)}`; cls = "on";
         if (aberto.pos_em && sg.base) { const pp = { lat: aberto.pos_lat, lng: aberto.pos_lng, precisao: aberto.pos_prec };
           st += foraDaBase(sg.base, pp) ? ` · <span class="late-txt">⚠ fora da praça (${fmtDist(distM(sg.base, pp))}) às ${hhmm(aberto.pos_em)}</span>` : ` · ✔ na praça às ${hhmm(aberto.pos_em)}`; }
         if (at && !at.fotos.every(Boolean) && Date.now() - at.hora > 10 * 60e3) st += ` · <span class="late-txt">⚠ ronda das ${hhmm(at.hora)} atrasada</span>`;
@@ -484,7 +508,8 @@ function segGestor(ro) {
           const it = infoTurno(t, sg.fotos);
           h += `<div class="turno"><p class="h3">Turno de ${fmtDT(t.inicio)}${t.fim ? " até " + fmtDT(t.fim) : " · em andamento"}</p>
             <div class="sf-row"><span class="sf-l">Chegada</span>${it.entrada ? fotoSeg(it.entrada, "Rosto na chegada") : `<span class="note">sem foto</span>`}</div>`;
-          it.rondas.forEach(x => h += `<div class="sf-row"><span class="sf-l">Ronda ${hhmm(x.hora)}</span>${x.fotos.map((f, l) => f ? fotoSeg(f, f.local_nome || x.nomes[l]) : `<span class="sf falta">faltou<br>${esc(x.nomes[l])}</span>`).join("")}</div>`);
+          if (!t.fim && !it.rondas.length) h += `<p class="note" style="margin:0">A primeira ronda é às <b>${hhmm(Number(t.inicio) + HORA)}</b>.</p>`;
+          h += linhasRondas(t, it, g);
           if (t.fim) h += `<div class="sf-row"><span class="sf-l">Saída</span>${it.saida ? fotoSeg(it.saida, "Rosto na saída") : `<span class="note">sem foto</span>`}${t.encerrado_por ? `<span class="note">encerrado/corrigido por ${esc(t.encerrado_por)}</span>` : ""}</div>`;
           if (!ro) h += S.segFim === t.id ? `<div class="panel"><label class="f">${t.fim ? "Hora certa da saída" : "Hora da saída"}<input id="fim-${t.id}" type="datetime-local" value="${inputDT(t.fim || Date.now())}"></label>
               <div class="row"><button class="primary" data-act="seg-encerrar" data-id="${t.id}">${t.fim ? "Salvar hora certa" : "Encerrar turno"}</button><button data-act="seg-fim-x">Cancelar</button></div></div>`
@@ -977,6 +1002,7 @@ function reduzir(file0) {
   });
 }
 document.addEventListener("change", async ev => {
+  if (ev.target.type === "file") S.arqAte = 0;
   if (ev.target.id === "f-pessoa") { S.fPessoa = ev.target.value; return draw(); }
   if (ev.target.id === "foto-seg") {
     const f0 = ev.target.files[0]; ev.target.value = ""; if (!f0) return;
@@ -1006,7 +1032,10 @@ document.addEventListener("change", async ev => {
 });
 
 /* ---------- atualização automática ---------- */
-setInterval(() => { if (S.chave && !document.hidden && !S.busy) carregar(); }, 5000);
+const escolhendoArquivo = () => Date.now() < (S.arqAte || 0);
+document.addEventListener("click", ev => { if (ev.target.closest && ev.target.closest("label.upl, input[type=file]")) S.arqAte = Date.now() + 120e3; }, true);
+document.addEventListener("cancel", ev => { if (ev.target.type === "file") S.arqAte = 0; }, true);
+setInterval(() => { if (S.chave && !document.hidden && !S.busy && !escolhendoArquivo()) carregar(); }, 5000);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) { S.escondidoEm = Date.now(); return; }
   // Voltou ao app depois de um tempo: mostra o lembrete de novo
