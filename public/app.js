@@ -49,6 +49,7 @@ function estado(t) {
   return late ? "late" : "pend";
 }
 const aberta = t => estado(t) !== "ok";
+const ativas = () => S.d.tarefas.filter(t => !t.arquivada);
 const ordenar = (a, b) => (PRIO[prio(a)].r - PRIO[prio(b)].r) || (a.prazo || "9999").localeCompare(b.prazo || "9999") || a.id - b.id;
 
 function vistas() { try { return new Set(JSON.parse(ls.get("vistas_" + EU()) || "[]")); } catch (e) { return new Set(); } }
@@ -107,7 +108,7 @@ function drawInner() {
     app.innerHTML = h + entrada(); const f = app.querySelector("[data-autofocus]"); if (f) f.focus(); return;
   }
   role.hidden = false; role.textContent = (G() ? "Gestor" : S.d.eu.nome) + " · Sair";
-  const ts = S.d.tarefas, c = { pend: 0, run: 0, ok: 0, late: 0 };
+  const ts = ativas(), c = { pend: 0, run: 0, ok: 0, late: 0 };
   ts.forEach(t => { const e = estado(t); if (e === "ok") c.ok++; else if (e === "run" || e === "late-run") c.run++; else c.pend++; if (e.startsWith("late")) c.late++; });
   stats.innerHTML = `<span>${c.pend} a iniciar</span><span>${c.run} em andamento</span><span>${c.ok} concluídas</span>${c.late ? `<span>${c.late} atrasadas</span>` : ""}`;
 
@@ -238,9 +239,9 @@ const ACEITA = "image/*,.jpg,.jpeg,.png,.heic,.pdf,application/pdf,.doc,.docx,.x
 
 /* ---------- gestor: acompanhar ---------- */
 function acompanhar() {
-  const ts = S.d.tarefas;
+  const arq = S.fStatus === "arquivadas", ts = S.d.tarefas.filter(t => arq ? t.arquivada : !t.arquivada);
   let h = `<p class="h3" style="margin-top:12px">Prioridade</p><nav class="tabs prio">${chip("fprio", "todas", S.fPrio === "todas", "Todas")}${Object.entries(PRIO).map(([k, p]) => chip("fprio", k, S.fPrio === k, `${p.i} ${p.l}`)).join("")}</nav>`;
-  const st = [["abertas", "Abertas"], ["andamento", "Em andamento"], ["atrasadas", "Atrasadas"], ["concluidas", "Concluídas"], ["todas", "Todas"]];
+  const st = [["abertas", "Abertas"], ["andamento", "Em andamento"], ["atrasadas", "Atrasadas"], ["concluidas", "Concluídas"], ["todas", "Todas"], ["arquivadas", "🗄 Arquivadas"]];
   if (!st.some(x => x[0] === S.fStatus)) S.fStatus = "abertas";
   h += `<nav class="tabs st" style="padding-top:6px">${st.map(([k, l]) => chip("fstatus", k, S.fStatus === k, l)).join("")}</nav>`;
   h += `<label class="f" style="margin-top:8px">Colaborador<select id="f-pessoa" data-act-change="fpessoa"><option value="">Todos</option>${S.d.funcionarios.map(f => `<option value="${f.id}" ${String(f.id) === S.fPessoa ? "selected" : ""}>${esc(f.nome)}</option>`).join("")}</select></label>`;
@@ -249,10 +250,12 @@ function acompanhar() {
     case "atrasadas": return e === "late" || e === "late-run"; case "concluidas": return e === "ok"; default: return true; } };
   const list = ts.filter(t => okSt(t) && (S.fPrio === "todas" || prio(t) === S.fPrio) && (!S.fPessoa || S.d.pessoas.some(p => p.tarefa_id === t.id && String(p.func_id) === S.fPessoa)));
   const fimDe = t => Math.max(0, ...pessoasDe(t).map(p => p.fim || 0));
-  list.sort(S.fStatus === "concluidas" ? (a, b) => fimDe(b) - fimDe(a) : ordenar);
-  if (!ts.length) return h + `<div class="empty">Nenhuma tarefa ainda. Use <b>＋ Nova tarefa</b> para criar a primeira.</div>`;
+  list.sort(arq ? (a, b) => Number(b.arquivada) - Number(a.arquivada) : S.fStatus === "concluidas" ? (a, b) => fimDe(b) - fimDe(a) : ordenar);
+  if (S.fStatus === "concluidas" && list.length) h += `<div class="row" style="margin-top:12px">${confirmBtn("arq-todas", 0, `🗄 Arquivar ${list.length === 1 ? "esta concluída" : "as " + list.length + " concluídas"}`).replace('class="ghost danger"', 'class="arq-btn"')}</div>`;
+  if (arq) h += `<p class="note" style="margin-top:12px">Tarefas arquivadas saem do painel e da lista dos colaboradores, mas continuam guardadas aqui com fotos e observações.</p>`;
+  if (!ts.length) return h + `<div class="empty">${arq ? "Nenhuma tarefa arquivada." : "Nenhuma tarefa ainda. Use <b>＋ Nova tarefa</b> para criar a primeira."}</div>`;
   if (!list.length) return h + `<div class="empty">Nada neste filtro.</div>`;
-  return h + lista(list, S.fPrio === "todas" && S.fStatus !== "concluidas");
+  return h + lista(list, S.fPrio === "todas" && S.fStatus !== "concluidas" && !arq);
 }
 
 function equipe() {
@@ -354,19 +357,20 @@ function card(t) {
     h += `</div>`;
   }
   h += `</div><textarea id="ob-${t.id}" maxlength="1000" placeholder="${G() ? "Observação do gestor (ninguém apaga)" : "Escreva uma observação"}"></textarea><button class="primary" data-act="ob" data-id="${t.id}">Enviar observação</button>`;
-  if (G()) h += `<div class="row"><button data-act="et" data-id="${t.id}">Editar</button>${confirmBtn("del-task", t.id, "Excluir")}</div>`;
+  if (G() && !t.arquivada && e.startsWith("late")) h += `<p class="h3">Mudar o prazo</p>${prazoRapido(t)}`;
+  if (G()) h += `<div class="row">${t.arquivada ? `<button data-act="desarquivar" data-id="${t.id}">↩ Voltar para o painel</button>` : `<button class="${e === "ok" ? "arq-btn" : ""}" data-act="arquivar" data-id="${t.id}">🗄 Arquivar</button>`}<button data-act="et" data-id="${t.id}">Editar</button>${confirmBtn("del-task", t.id, "Excluir")}</div>`;
   return h + `</div></article>`;
 }
 
 /* ---------- alertas de atraso (gestor) ---------- */
 function alertas() {
   const daqui = new Date(Date.now() + 2 * 3600e3).toLocaleString("sv-SE", { timeZone: TZ }).slice(0, 16).replace(" ", "T");
-  const abertas = S.d.tarefas.filter(aberta);
+  const abertas = ativas().filter(aberta);
   const vencidas = abertas.filter(t => atrasado(t.prazo)).sort(ordenar);
   const semInicio = abertas.filter(t => !atrasado(t.prazo) && t.prazo && t.prazo.includes("T") && t.prazo <= daqui && pessoasDe(t).some(p => !p.inicio)).sort(ordenar);
   if (!vencidas.length && !semInicio.length) return "";
   if (S.tab === "nova") return `<button class="alerta curto" data-act="ver-alertas"><b class="al-t">🚨 ${[vencidas.length ? (vencidas.length === 1 ? "1 atrasada" : vencidas.length + " atrasadas") : "", semInicio.length ? semInicio.length + " vencendo sem iniciar" : ""].filter(Boolean).join(" · ")}</b><small>Toque para ver</small></button>`;
-  const linha = (t, txt) => `<button class="al-item" data-act="ir-tarefa" data-id="${t.id}"><span>${PRIO[prio(t)].i} <b>${esc(t.descricao)}</b></span><small>${txt}</small></button>`;
+  const linha = (t, txt) => `<div class="al-box"><button class="al-item" data-act="ir-tarefa" data-id="${t.id}"><span>${PRIO[prio(t)].i} <b>${esc(t.descricao)}</b></span><small>${txt}</small></button>${prazoRapido(t)}</div>`;
   let h = `<div class="alerta" role="alert"><b class="al-t">🚨 Atenção</b>`;
   if (vencidas.length) {
     h += `<p class="h3">${vencidas.length === 1 ? "1 tarefa atrasada" : vencidas.length + " tarefas atrasadas"}</p>`;
@@ -377,6 +381,15 @@ function alertas() {
     semInicio.slice(0, 6).forEach(t => h += linha(t, `entrega ${fmtD(t.prazo)} · ${esc(pessoasDe(t).filter(p => !p.inicio).map(p => nome(p.func_id)).join(", "))}`));
   }
   return h + `</div>`;
+}
+
+/* ---------- mudar prazo rápido (gestor) ---------- */
+function somaSP(ms) { return new Date(ms).toLocaleString("sv-SE", { timeZone: TZ }).slice(0, 16).replace(" ", "T"); }
+function prazoRapido(t) {
+  if (S.prazoDe === t.id) return `<div class="prazo-r"><input type="datetime-local" id="pz-${t.id}" value="${esc(t.prazo && t.prazo.includes("T") ? t.prazo : "")}" data-autofocus><button class="primary" data-act="pz-salvar" data-id="${t.id}">Salvar</button><button data-act="pz-fechar">✕</button></div>`;
+  const am = somaSP(Date.now() + 864e5).slice(0, 10), hr = t.prazo && t.prazo.includes("T") ? t.prazo.slice(11) : "18:00";
+  const op = [[somaSP(Date.now() + 2 * 3600e3), "+2 horas"], [am + "T08:00", "Amanhã 8h"], [am + "T" + hr, "Amanhã " + hr.replace(":00", "h")]];
+  return `<div class="prazo-r"><span>📅 Novo prazo:</span>${op.map(([v, l]) => `<button data-act="pz" data-id="${t.id}" data-k="${v}">${l}</button>`).join("")}<button data-act="pz-outro" data-id="${t.id}">Outro…</button></div>`;
 }
 
 /* ---------- avisos no celular ---------- */
@@ -467,6 +480,13 @@ document.addEventListener("click", async ev => {
     case "wz-modelo": { const m = (S.d.modelos || []).find(x => x.id === id); if (!m) return;
       S.wz = Object.assign(novoWz(), { pessoas: new Set(m.pessoas.filter(i => S.d.funcionarios.some(f => f.id === i))), prioridade: PRIO[m.prioridade] ? m.prioridade : "normal", titulo: m.titulo, detalhes: m.detalhes || "", modelo: m.titulo });
       S.wz.passo = S.wz.pessoas.size ? 2 : 1; draw(); window.scrollTo({ top: 0 }); return; }
+    case "pz": return acao("POST", `/api/tarefas/${id}/prazo`, { prazo: b.dataset.k });
+    case "pz-outro": S.prazoDe = id; return draw();
+    case "pz-fechar": S.prazoDe = null; return draw();
+    case "pz-salvar": { const v = val("pz-" + id); if (!v) { S.err = "Escolha a nova data e hora."; return draw(); } S.prazoDe = null; return acao("POST", `/api/tarefas/${id}/prazo`, { prazo: v }); }
+    case "arquivar": S.open.delete(id); return acao("POST", `/api/tarefas/${id}/arquivar`);
+    case "desarquivar": S.open.delete(id); return acao("POST", `/api/tarefas/${id}/arquivar`, { desfazer: true });
+    case "arq-todas": return acao("POST", "/api/tarefas/arquivar-concluidas");
     case "ver-alertas": S.tab = "acompanhar"; draw(); window.scrollTo({ top: 0 }); return;
     case "del-modelo": return acao("DELETE", "/api/modelos/" + id);
     case "ir-tarefa": S.tab = "acompanhar"; S.fStatus = "todas"; S.fPrio = "todas"; S.fPessoa = ""; S.open.add(id); draw();

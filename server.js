@@ -44,7 +44,8 @@ async function migrar() {
   CREATE TABLE IF NOT EXISTS push(endpoint TEXT PRIMARY KEY, func_id INT REFERENCES funcionarios(id) ON DELETE CASCADE,
     gestor BOOLEAN NOT NULL DEFAULT false, dados TEXT NOT NULL, criado BIGINT NOT NULL);
   ALTER TABLE tarefa_pessoas ADD COLUMN IF NOT EXISTS avisado_prazo BIGINT;
-  ALTER TABLE anexos ADD COLUMN IF NOT EXISTS conclusao BOOLEAN NOT NULL DEFAULT false;`);
+  ALTER TABLE anexos ADD COLUMN IF NOT EXISTS conclusao BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS arquivada BIGINT;`);
   // Leva as tarefas antigas (um responsável) para o novo formato, uma vez só
   await q(`
   INSERT INTO tarefa_pessoas(tarefa_id,func_id,ciente,inicio,fim)
@@ -113,7 +114,7 @@ app.get("/api/estado", w(async (req, res) => {
     return res.json({ eu: req.eu, setores, tarefas, pessoas, obs, funcionarios: func, anexos, modelos });
   }
   // Colaborador: só as tarefas em que ele está (e os colegas dessas tarefas)
-  const ids = (await q("SELECT tarefa_id FROM tarefa_pessoas WHERE func_id=$1", [req.eu.id])).map(r => r.tarefa_id);
+  const ids = (await q("SELECT tp.tarefa_id FROM tarefa_pessoas tp JOIN tarefas t ON t.id=tp.tarefa_id WHERE tp.func_id=$1 AND t.arquivada IS NULL", [req.eu.id])).map(r => r.tarefa_id);
   const [setores, tarefas, pessoas, obs, func, anexos] = await Promise.all([
     q("SELECT id,nome FROM setores"), q("SELECT * FROM tarefas WHERE id = ANY($1) ORDER BY id", [ids]),
     q("SELECT * FROM tarefa_pessoas WHERE tarefa_id = ANY($1)", [ids]), q("SELECT * FROM obs WHERE tarefa_id = ANY($1) ORDER BY em", [ids]),
@@ -169,6 +170,24 @@ app.patch("/api/tarefas/:id", gestor, w(async (req, res) => {
   await q("UPDATE tarefa_pessoas SET avisado_prazo=NULL WHERE tarefa_id=$1", [req.params.id]);
   const novos = await q("INSERT INTO tarefa_pessoas(tarefa_id,func_id) SELECT $1, unnest($2::int[]) ON CONFLICT DO NOTHING RETURNING func_id", [req.params.id, d.pessoas]);
   if (novos.length) avisoSeguro({ func: novos.map(r => r.func_id) }, { title: "Tarefa nova", body: `${d.titulo}\nEntrega: ${fmtPrazo(d.prazo)}`, tag: "t" + req.params.id });
+  res.json({ ok: 1 });
+}));
+// Arquivar (tira do painel, fica no histórico) e mudar só o prazo
+app.post("/api/tarefas/:id/arquivar", gestor, w(async (req, res) => {
+  await q("UPDATE tarefas SET arquivada=$1 WHERE id=$2", [req.body.desfazer ? null : Date.now(), req.params.id]); res.json({ ok: 1 });
+}));
+app.post("/api/tarefas/arquivar-concluidas", gestor, w(async (req, res) => {
+  const r = await q(`UPDATE tarefas t SET arquivada=$1 WHERE arquivada IS NULL AND EXISTS(SELECT 1 FROM tarefa_pessoas p WHERE p.tarefa_id=t.id)
+    AND NOT EXISTS(SELECT 1 FROM tarefa_pessoas p WHERE p.tarefa_id=t.id AND p.fim IS NULL) RETURNING id`, [Date.now()]);
+  res.json({ ok: 1, total: r.length });
+}));
+app.post("/api/tarefas/:id/prazo", gestor, w(async (req, res) => {
+  const prazo = prazoOk(req.body.prazo); if (!prazo) return res.status(400).json({ erro: "Escolha a nova data e hora." });
+  const r = await q("UPDATE tarefas SET prazo=$1 WHERE id=$2 RETURNING descricao", [prazo, req.params.id]);
+  if (!r.length) return res.status(404).json({ erro: "Tarefa não encontrada." });
+  await q("UPDATE tarefa_pessoas SET avisado_prazo=NULL WHERE tarefa_id=$1", [req.params.id]);
+  const pend = (await q("SELECT func_id FROM tarefa_pessoas WHERE tarefa_id=$1 AND fim IS NULL", [req.params.id])).map(x => x.func_id);
+  avisoSeguro({ func: pend }, { title: "📅 Prazo alterado", body: `${r[0].descricao}\nNova entrega: ${fmtPrazo(prazo)}`, tag: "t" + req.params.id });
   res.json({ ok: 1 });
 }));
 app.delete("/api/tarefas/:id", gestor, w(async (req, res) => { await q("DELETE FROM tarefas WHERE id=$1", [req.params.id]); res.json({ ok: 1 }); }));
@@ -285,7 +304,7 @@ const agoraSP = (ms = Date.now()) => new Date(ms).toLocaleString("sv-SE", { time
 async function verificarPrazos() {
   const agora = agoraSP(), daqui1h = agoraSP(Date.now() + 3600e3);
   const rows = await q(`SELECT tp.tarefa_id, tp.func_id, t.descricao, t.prazo FROM tarefa_pessoas tp JOIN tarefas t ON t.id=tp.tarefa_id
-    WHERE tp.fim IS NULL AND tp.avisado_prazo IS NULL AND t.prazo LIKE '%T%' AND t.prazo > $1 AND t.prazo <= $2`, [agora, daqui1h]);
+    WHERE tp.fim IS NULL AND tp.avisado_prazo IS NULL AND t.arquivada IS NULL AND t.prazo LIKE '%T%' AND t.prazo > $1 AND t.prazo <= $2`, [agora, daqui1h]);
   for (const r of rows) {
     await q("UPDATE tarefa_pessoas SET avisado_prazo=$1 WHERE tarefa_id=$2 AND func_id=$3", [Date.now(), r.tarefa_id, r.func_id]);
     await avisarCelular({ func: [r.func_id] }, { title: "⏰ Prazo em menos de 1 hora", body: `${r.descricao}\nEntrega: ${fmtPrazo(r.prazo)}. Não esqueça de apertar TERMINAR.`, tag: "p" + r.tarefa_id });
