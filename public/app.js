@@ -554,8 +554,8 @@ function configPanico() {
   }
   h += `<div class="grid2" style="margin-top:8px"><label class="f">Nome<input id="ct-nome" maxlength="60"></label><label class="f">Celular com DDD<input id="ct-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label></div>
     <button data-act="add-central">＋ Adicionar</button></div></section>`;
-  h += `<section class="grupo"><div class="grupo-h"><h2>📲 Pânico no WhatsApp dos gestores</h2><span class="cnt">${zs.length}</span></div><div class="panel">
-    <p class="note" style="margin:0">Os gestores recebem uma mensagem no WhatsApp (sem alarme) quando alguém aperta o pânico. É grátis, mas cada gestor precisa liberar uma vez no próprio celular:</p>
+  h += `<section class="grupo"><div class="grupo-h"><h2>📲 Pânico para os gestores</h2><span class="cnt">${zs.length}</span></div><div class="panel">
+    <p class="note" style="margin:0">Os gestores já recebem o pânico como <b>aviso no celular, sem som</b> (é só ter tocado em "Ativar avisos" no app). O WhatsApp é um extra opcional: o serviço grátis (CallMeBot) está lotado agora e prometeu um número novo em alguns dias. Quando abrir, é só:</p>
     <ol class="passos"><li>Salve nos contatos o número <b>+34 644 66 32 62</b>.</li><li>Mande para ele no WhatsApp: <b>I allow callmebot to send me messages</b></li><li>Ele responde com uma <b>APIKEY</b> (um número). Coloque aqui embaixo.</li></ol>`;
   for (const z of zs) h += `<div class="p"><span>📲 ${esc(z.nome)}<br><small class="note">${esc(fmtTel(z.telefone))}</small></span>${confirmBtn("del-zap", z.telefone, "Tirar")}</div>`;
   h += `<div class="grid3"><label class="f">Nome<input id="zp-nome" maxlength="60" value="${esc(zs.length ? "" : S.d.eu.nome || "")}"></label><label class="f">Celular<input id="zp-tel" type="tel" inputmode="numeric" placeholder="11 98765-4321"></label><label class="f">APIKEY<input id="zp-key" inputmode="numeric" maxlength="20"></label></div>

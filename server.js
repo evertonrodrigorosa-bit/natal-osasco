@@ -295,6 +295,8 @@ app.post("/api/seg/panico", w(async (req, res) => {
   const payload = { title: `🆘 PÂNICO: ${req.eu.nome}`, body: `${req.eu.nome} pediu ajuda às ${new Date(Number(p.em)).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}. Abra o app para ver o local e ligar.`, tag: "panico" + p.id, alarme: true };
   await avisarCelular({ func: quem }, payload).catch(e => console.error("panico push", e.message));
   const mapa = p.lat !== null && p.lat !== undefined ? `\nLocal: https://maps.google.com/?q=${p.lat},${p.lng}` : (lat !== null ? `\nLocal: https://maps.google.com/?q=${lat},${lng}` : "");
+  // Gestores: aviso no celular SEM som (pedido do Bruce: sem alarme)
+  avisoSeguro({ gestor: true }, { title: `🆘 PÂNICO: ${req.eu.nome}`, body: `${req.eu.nome} pediu ajuda às ${new Date(Number(p.em)).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}. O Alex já foi alarmado. Toque para ver o local.`, tag: "panico-g" + p.id, silencioso: true });
   zapGestores(`🆘 *PÂNICO*: ${req.eu.nome} pediu ajuda às ${new Date(Number(p.em)).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })}.${mapa}\nVeja no app: https://natal-osasco.onrender.com`, p.id);
   res.json({ ok: 1, id: p.id });
 }));
