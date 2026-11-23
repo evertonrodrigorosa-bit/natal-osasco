@@ -267,7 +267,7 @@ function acompanhar() {
   h += `<nav class="tabs st" style="padding-top:6px">${st.map(([k, l]) => chip("fstatus", k, S.fStatus === k, l)).join("")}</nav>`;
   h += `<label class="f" style="margin-top:8px">Colaborador<select id="f-pessoa" data-act-change="fpessoa"><option value="">Todos</option>${S.d.funcionarios.map(f => `<option value="${f.id}" ${String(f.id) === S.fPessoa ? "selected" : ""}>${esc(f.nome)}</option>`).join("")}</select></label>`;
   const okSt = t => { const e = estado(t); switch (S.fStatus) {
-    case "abertas": return e !== "ok"; case "iniciar": return e === "pend" || e === "late"; case "andamento": return e === "run" || e === "late-run";
+    case "abertas": return e !== "ok"; case "iniciar": return e === "pend"; case "andamento": return e === "run" || e === "late-run";
     case "atrasadas": return e === "late" || e === "late-run"; case "concluidas": return e === "ok"; default: return true; } };
   const list = ts.filter(t => okSt(t) && (S.fPrio === "todas" || prio(t) === S.fPrio) && (!S.fPessoa || S.d.pessoas.some(p => p.tarefa_id === t.id && String(p.func_id) === S.fPessoa)));
   const fimDe = t => Math.max(0, ...pessoasDe(t).map(p => p.fim || 0));
