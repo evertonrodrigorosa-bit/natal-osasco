@@ -46,6 +46,8 @@ async function migrar() {
   ALTER TABLE tarefa_pessoas ADD COLUMN IF NOT EXISTS avisado_prazo BIGINT;
   ALTER TABLE anexos ADD COLUMN IF NOT EXISTS conclusao BOOLEAN NOT NULL DEFAULT false;
   ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS arquivada BIGINT;
+  ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS local TEXT;
+  ALTER TABLE modelos ADD COLUMN IF NOT EXISTS local TEXT;
   -- Segurança: turnos com foto do rosto e rondas de hora em hora
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS seguranca BOOLEAN NOT NULL DEFAULT false;
   ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS turno TEXT;
@@ -488,20 +490,21 @@ async function dadosTarefa(b, res) {
   const pedidas = [...new Set((Array.isArray(b.pessoas) ? b.pessoas : []).map(Number).filter(Number.isInteger))];
   const pessoas = pedidas.length ? (await q("SELECT id FROM funcionarios WHERE id = ANY($1)", [pedidas])).map(r => r.id) : [];
   if (!pessoas.length) { res.status(400).json({ erro: "Escolha pelo menos um colaborador." }); return null; }
-  return { titulo, prazo, prioridade, detalhes, pessoas };
+  const local = String(b.local ?? "").trim().replace(/\s+/g, " ").slice(0, 80) || null;
+  return { titulo, prazo, prioridade, detalhes, pessoas, local };
 }
 app.post("/api/tarefas", gestor, w(async (req, res) => {
   const d = await dadosTarefa(req.body, res); if (!d) return;
-  const [t] = await q("INSERT INTO tarefas(descricao,detalhes,prazo,prioridade,criado,v2) VALUES($1,$2,$3,$4,$5,true) RETURNING id",
-    [d.titulo, d.detalhes, d.prazo, d.prioridade, Date.now()]);
+  const [t] = await q("INSERT INTO tarefas(descricao,detalhes,prazo,prioridade,criado,v2,local) VALUES($1,$2,$3,$4,$5,true,$6) RETURNING id",
+    [d.titulo, d.detalhes, d.prazo, d.prioridade, Date.now(), d.local]);
   await q("INSERT INTO tarefa_pessoas(tarefa_id,func_id) SELECT $1, unnest($2::int[])", [t.id, d.pessoas]);
-  if (req.body.salvarModelo) await q("INSERT INTO modelos(titulo,detalhes,prioridade,pessoas,criado) VALUES($1,$2,$3,$4,$5)", [d.titulo, d.detalhes, d.prioridade, d.pessoas, Date.now()]);
+  if (req.body.salvarModelo) await q("INSERT INTO modelos(titulo,detalhes,prioridade,pessoas,criado,local) VALUES($1,$2,$3,$4,$5,$6)", [d.titulo, d.detalhes, d.prioridade, d.pessoas, Date.now(), d.local]);
   avisoSeguro({ func: d.pessoas }, { title: "Tarefa nova" + (d.prioridade === "alta" ? " · PRIORIDADE ALTA" : ""), body: `${d.titulo}\nEntrega: ${fmtPrazo(d.prazo)}`, tag: "t" + t.id });
   res.json({ id: t.id });
 }));
 app.patch("/api/tarefas/:id", gestor, w(async (req, res) => {
   const d = await dadosTarefa(req.body, res); if (!d) return;
-  const r = await q("UPDATE tarefas SET descricao=$1,detalhes=$2,prazo=$3,prioridade=$4 WHERE id=$5 RETURNING id", [d.titulo, d.detalhes, d.prazo, d.prioridade, req.params.id]);
+  const r = await q("UPDATE tarefas SET descricao=$1,detalhes=$2,prazo=$3,prioridade=$4,local=$6 WHERE id=$5 RETURNING id", [d.titulo, d.detalhes, d.prazo, d.prioridade, req.params.id, d.local]);
   if (!r.length) return res.status(404).json({ erro: "Tarefa não encontrada." });
   await q("DELETE FROM tarefa_pessoas WHERE tarefa_id=$1 AND NOT (func_id = ANY($2::int[]))", [req.params.id, d.pessoas]);
   await q("UPDATE tarefa_pessoas SET avisado_prazo=NULL WHERE tarefa_id=$1", [req.params.id]);

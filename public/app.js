@@ -5,9 +5,9 @@ const app = document.getElementById("app");
 const ls = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
   set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} } };
 
-const novoWz = () => ({ passo: 1, pessoas: new Set(), prazo: "", prioridade: "", titulo: "", detalhes: "", arquivos: [], criada: null });
+const novoWz = () => ({ passo: 1, pessoas: new Set(), prazo: "", prioridade: "", titulo: "", detalhes: "", local: "", arquivos: [], criada: null });
 const S = { chave: ls.get("chave"), d: null, tab: null, open: new Set(), err: "", busy: false, entrarGestor: false, confirm: null,
-  ed: null, editingObs: null, wz: novoWz(), fPrio: "todas", fStatus: "abertas", fPessoa: "", lembreteVisto: false, escondidoEm: 0 };
+  ed: null, editingObs: null, wz: novoWz(), fPrio: "todas", fStatus: "abertas", fPessoa: "", fLocal: "", lembreteVisto: false, escondidoEm: 0 };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtDT = ms => ms ? new Date(Number(ms)).toLocaleString("pt-BR", { timeZone: TZ, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -33,6 +33,23 @@ const pessoasDe = t => S.d.pessoas.filter(p => p.tarefa_id === t.id).sort((a, b)
 const minha = t => S.d.pessoas.find(p => p.tarefa_id === t.id && p.func_id === EU());
 const nome = id => { const f = S.d.funcionarios.find(x => x.id === id); return f ? f.nome : "Removido"; };
 const setorNome = t => t.setor_id ? ((S.d.setores || []).find(s => s.id === t.setor_id) || {}).nome || "" : "";
+// Local da tarefa (onde é o serviço). Tarefas antigas usam o nome do setor.
+const localDe = t => String(t.local || setorNome(t) || "").trim();
+const chaveLocal = l => String(l).toLocaleLowerCase("pt-BR");
+function listaLocais() { const m = new Map(); S.d.tarefas.forEach(t => { const l = localDe(t); if (l && !m.has(chaveLocal(l))) m.set(chaveLocal(l), l); });
+  return [...m.values()].sort((a, b) => a.localeCompare(b, "pt-BR")); }
+const SEM_LOCAL = "__sem";
+const okLocal = t => !S.fLocal || (S.fLocal === SEM_LOCAL ? !localDe(t) : chaveLocal(localDe(t)) === chaveLocal(S.fLocal));
+const okPessoa = t => !S.fPessoa || S.d.pessoas.some(p => p.tarefa_id === t.id && String(p.func_id) === S.fPessoa);
+// Filtros de local e pessoa (os mesmos no Painel e no Acompanhar)
+function filtrosLP() {
+  const ls = listaLocais();
+  if (S.fLocal && S.fLocal !== SEM_LOCAL && !ls.some(l => chaveLocal(l) === chaveLocal(S.fLocal))) S.fLocal = "";
+  const temSem = S.d.tarefas.some(t => !localDe(t));
+  return `<div class="filtros-lp"><label class="f">📍 Local<select id="f-local"><option value="">Todos</option>${ls.map(l => `<option value="${esc(l)}" ${chaveLocal(l) === chaveLocal(S.fLocal) ? "selected" : ""}>${esc(l)}</option>`).join("")}${temSem ? `<option value="${SEM_LOCAL}" ${S.fLocal === SEM_LOCAL ? "selected" : ""}>Sem local</option>` : ""}</select></label>
+    <label class="f">👤 Pessoa<select id="f-pessoa"><option value="">Todas</option>${S.d.funcionarios.map(f => `<option value="${f.id}" ${String(f.id) === S.fPessoa ? "selected" : ""}>${esc(f.nome)}</option>`).join("")}</select></label></div>
+    ${S.fLocal || S.fPessoa ? `<div class="row" style="margin-top:6px"><span class="note">Mostrando só ${[S.fLocal ? (S.fLocal === SEM_LOCAL ? "tarefas sem local" : "o local " + esc(S.fLocal)) : "", S.fPessoa ? "as tarefas de " + esc(nome(Number(S.fPessoa))) : ""].filter(Boolean).join(" e ")}.</span><button class="ghost" data-act="limpar-filtros">✕ Limpar filtros</button></div>` : ""}`;
+}
 function estadoP(p, t) {
   if (p.fim) return "ok";
   const late = atrasado(t.prazo);
@@ -250,12 +267,14 @@ function wizard() {
     return h + `<div class="wz-nav"><button class="big" data-act="wz-ir" data-k="2">← Voltar</button></div>`;
   }
   h += `<div class="panel"><label class="f">Título<input id="wz-titulo" maxlength="200" value="${esc(W.titulo)}" placeholder="Ex.: Instalar cascata de luz na fachada" data-autofocus></label>
+    <label class="f">📍 Local (opcional)<input id="wz-local" maxlength="80" list="locais-dl" value="${esc(W.local)}" placeholder="Ex.: Praça, Coreto, Av. dos Autonomistas"></label>${datalistLocais()}
     <label class="f">Detalhes (opcional)<textarea id="wz-det" maxlength="1000" placeholder="Local, material, observações…">${esc(W.detalhes)}</textarea></label>
     <p class="h3">Anexos</p>${W.arquivos.length ? `<div class="arqs">${W.arquivos.map((f, i) => `<span class="pill">📎 ${esc(f.name)} <button class="ghost" data-act="wz-tira" data-id="${i}" aria-label="Tirar ${esc(f.name)}">✕</button></span>`).join("")}</div>` : ""}
     <label class="upl"><input type="file" id="wz-arq" accept="${ACEITA}" multiple hidden>📎 Anexar arquivo (foto, PDF, Word, Excel)</label>
     ${W.modelo ? `<p class="note">⚡ Usando o modelo “${esc(W.modelo)}”.</p>` : `<label class="check"><input type="checkbox" id="wz-salvar" ${W.salvarModelo ? "checked" : ""}> Salvar como modelo para usar de novo</label>`}</div>`;
   return h + `<div class="wz-nav"><button class="big" data-act="wz-ir" data-k="3">← Voltar</button><button class="primary big" data-act="wz-criar">✔ Criar tarefa</button></div>`;
 }
+const datalistLocais = () => `<datalist id="locais-dl">${listaLocais().map(l => `<option value="${esc(l)}">`).join("")}</datalist>`;
 const ACEITA = "image/*,.jpg,.jpeg,.png,.heic,.pdf,application/pdf,.doc,.docx,.xls,.xlsx,.txt";
 
 /* ---------- gestor: acompanhar ---------- */
@@ -265,11 +284,11 @@ function acompanhar() {
   const st = [["abertas", "Abertas"], ["iniciar", "A iniciar"], ["andamento", "Em andamento"], ["atrasadas", "Atrasadas"], ["concluidas", "Concluídas"], ["todas", "Todas"], ["arquivadas", "🗄 Arquivadas"]];
   if (!st.some(x => x[0] === S.fStatus)) S.fStatus = "abertas";
   h += `<nav class="tabs st" style="padding-top:6px">${st.map(([k, l]) => chip("fstatus", k, S.fStatus === k, l)).join("")}</nav>`;
-  h += `<label class="f" style="margin-top:8px">Colaborador<select id="f-pessoa" data-act-change="fpessoa"><option value="">Todos</option>${S.d.funcionarios.map(f => `<option value="${f.id}" ${String(f.id) === S.fPessoa ? "selected" : ""}>${esc(f.nome)}</option>`).join("")}</select></label>`;
+  h += filtrosLP();
   const okSt = t => { const e = estado(t); switch (S.fStatus) {
     case "abertas": return e !== "ok"; case "iniciar": return e === "pend"; case "andamento": return e === "run" || e === "late-run";
     case "atrasadas": return e === "late" || e === "late-run"; case "concluidas": return e === "ok"; default: return true; } };
-  const list = ts.filter(t => okSt(t) && (S.fPrio === "todas" || prio(t) === S.fPrio) && (!S.fPessoa || S.d.pessoas.some(p => p.tarefa_id === t.id && String(p.func_id) === S.fPessoa)));
+  const list = ts.filter(t => okSt(t) && (S.fPrio === "todas" || prio(t) === S.fPrio) && okPessoa(t) && okLocal(t));
   const fimDe = t => Math.max(0, ...pessoasDe(t).map(p => p.fim || 0));
   list.sort(arq ? (a, b) => Number(b.arquivada) - Number(a.arquivada) : S.fStatus === "concluidas" ? (a, b) => fimDe(b) - fimDe(a) : ordenar);
   if (S.fStatus === "concluidas" && list.length) h += `<div class="row" style="margin-top:12px">${confirmBtn("arq-todas", 0, `🗄 Arquivar ${list.length === 1 ? "esta concluída" : "as " + list.length + " concluídas"}`).replace('class="ghost danger"', 'class="arq-btn"')}</div>`;
@@ -283,23 +302,27 @@ function acompanhar() {
 const ROT = { pend: ["A iniciar", ""], run: ["Em andamento", "run"], "late-run": ["Atrasada · em andamento", "late"], late: ["Atrasada", "late"], ok: ["Concluída", "ok"] };
 function diaSP(ms) { return new Date(ms).toLocaleString("sv-SE", { timeZone: TZ }).slice(0, 10); }
 function painel() {
-  const ts = ativas(), hoje = agora().slice(0, 10), amanha = diaSP(Date.now() + 864e5), semana = diaSP(Date.now() + 7 * 864e5);
-  if (!ts.length) return `<div class="empty">Nenhuma tarefa agendada ainda. Use <b>＋ Nova tarefa</b> para criar a primeira.</div>`;
+  const todas = ativas(), ts = todas.filter(t => okLocal(t) && okPessoa(t)), hoje = agora().slice(0, 10), amanha = diaSP(Date.now() + 864e5), semana = diaSP(Date.now() + 7 * 864e5);
+  if (!todas.length) return `<div class="empty">Nenhuma tarefa agendada ainda. Use <b>＋ Nova tarefa</b> para criar a primeira.</div>`;
+  // Com uma pessoa escolhida, a situação mostrada é a dela (não a do grupo todo)
+  const est = t => { if (S.fPessoa) { const p = S.d.pessoas.find(x => x.tarefa_id === t.id && String(x.func_id) === S.fPessoa); if (p) return estadoP(p, t); } return estado(t); };
   const c = { late: 0, pend: 0, run: 0, ok: 0 };
-  ts.forEach(t => { const e = estado(t); c[e === "late-run" ? "late" : e]++; });
+  ts.forEach(t => { const e = est(t); c[e === "late-run" ? "late" : e]++; });
+  const h0 = filtrosLP();
+  if (!ts.length) return h0 + `<div class="empty">Nenhuma tarefa com esse filtro.</div>`;
   const tile = (k, n, l, cls) => `<button class="pn-tile ${cls}" data-act="painel-filtro" data-k="${k}"><b>${n}</b><span>${l}</span></button>`;
-  let h = `<section class="grupo"><div class="grupo-h"><h2>📊 Resumo</h2><span class="cnt">${ts.length} ${ts.length === 1 ? "tarefa" : "tarefas"}</span></div>
+  let h = h0 + `<section class="grupo"><div class="grupo-h"><h2>📊 Resumo</h2><span class="cnt">${ts.length} ${ts.length === 1 ? "tarefa" : "tarefas"}</span></div>
     <div class="pn-tiles">${tile("atrasadas", c.late, "Atrasadas", "late")}${tile("iniciar", c.pend, "A iniciar", "")}${tile("andamento", c.run, "Em andamento", "run")}${tile("concluidas", c.ok, "Concluídas", "ok")}</div>
     <p class="note">Toque num número para ver a lista dessas tarefas.</p></section>`;
 
   // Agenda: tarefas que ainda não terminaram, separadas pela data de entrega
-  const abertas = ts.filter(aberta).sort((a, b) => (a.prazo || "9999").localeCompare(b.prazo || "9999") || (PRIO[prio(a)].r - PRIO[prio(b)].r));
+  const abertas = ts.filter(t => est(t) !== "ok").sort((a, b) => (a.prazo || "9999").localeCompare(b.prazo || "9999") || (PRIO[prio(a)].r - PRIO[prio(b)].r));
   const blocos = [["🚨 Atrasadas", t => atrasado(t.prazo)], ["Hoje", t => !atrasado(t.prazo) && t.prazo && t.prazo.slice(0, 10) === hoje],
     ["Amanhã", t => t.prazo && t.prazo.slice(0, 10) === amanha], ["Próximos 7 dias", t => t.prazo && t.prazo.slice(0, 10) > amanha && t.prazo.slice(0, 10) <= semana],
     ["Mais para frente", t => t.prazo && t.prazo.slice(0, 10) > semana], ["Sem data de entrega", t => !t.prazo]];
-  const linha = t => { const e = estado(t), ps = pessoasDe(t), feitos = ps.filter(p => p.fim).length;
+  const linha = t => { const e = est(t), ps = pessoasDe(t), feitos = ps.filter(p => p.fim).length, lc = localDe(t);
     return `<button class="pn-item" data-act="ir-tarefa" data-id="${t.id}"><span class="pn-l">${PRIO[prio(t)].i} <b>${esc(t.descricao)}</b></span>
-      <small>${t.prazo ? "Entrega " + fmtD(t.prazo) : "Sem prazo"} · ${esc(ps.map(p => nome(p.func_id)).join(", ") || "ninguém")}${ps.length > 1 ? ` · ${feitos} de ${ps.length} terminaram` : ""}</small>
+      <small>${t.prazo ? "Entrega " + fmtD(t.prazo) : "Sem prazo"}${lc ? " · 📍 " + esc(lc) : ""} · ${esc(ps.map(p => nome(p.func_id)).join(", ") || "ninguém")}${ps.length > 1 ? ` · ${feitos} de ${ps.length} terminaram` : ""}</small>
       <span class="pill ${ROT[e][1]}">${ROT[e][0]}</span></button>`; };
   h += `<section class="grupo"><div class="grupo-h"><h2>📅 Agenda de entregas</h2><span class="cnt">${abertas.length} a fazer</span></div>`;
   if (!abertas.length) h += `<div class="empty">Tudo entregue! Nenhuma tarefa pendente.</div>`;
@@ -312,7 +335,7 @@ function painel() {
   h += `</section>`;
 
   // Por colaborador: quanto cada um tem para fazer
-  const porPessoa = S.d.funcionarios.map(f => { const r = { f, pend: 0, run: 0, late: 0, ok: 0, prox: null };
+  const porPessoa = S.d.funcionarios.filter(f => !S.fPessoa || String(f.id) === S.fPessoa).map(f => { const r = { f, pend: 0, run: 0, late: 0, ok: 0, prox: null };
     S.d.pessoas.forEach(p => { if (p.func_id !== f.id) return; const t = ts.find(x => x.id === p.tarefa_id); if (!t) return;
       const e = estadoP(p, t); if (e === "ok") r.ok++; else { if (e.startsWith("late")) r.late++; else if (e === "run") r.run++; else r.pend++;
         if (t.prazo && !atrasado(t.prazo) && (!r.prox || t.prazo < r.prox)) r.prox = t.prazo; } });
@@ -324,6 +347,18 @@ function painel() {
       <span class="pn-bar" aria-hidden="true"><i class="late" style="width:${pct(r.late)}"></i><i class="run" style="width:${pct(r.run)}"></i><i class="pend" style="width:${pct(r.pend)}"></i><i class="ok" style="width:${pct(r.ok)}"></i></span>
       <small>${[r.late ? `<span class="late-txt">${r.late} atrasada${r.late > 1 ? "s" : ""}</span>` : "", r.run ? r.run + " em andamento" : "", r.pend ? r.pend + " a iniciar" : "", r.ok ? r.ok + " concluída" + (r.ok > 1 ? "s" : "") : ""].filter(Boolean).join(" · ")}${r.prox ? ` · próxima entrega ${fmtD(r.prox)}` : ""}</small></button>`; }).join("")}</div>`;
   h += `<p class="note pn-leg"><i class="late"></i> atrasada <i class="run"></i> em andamento <i class="pend"></i> a iniciar <i class="ok"></i> concluída</p></section>`;
+  // Por local: quanto falta em cada lugar
+  if (!S.fLocal) {
+    const m = new Map(); ts.forEach(t => { const l = localDe(t) || "", k = chaveLocal(l); if (!m.has(k)) m.set(k, { l, late: 0, run: 0, pend: 0, ok: 0, total: 0 });
+      const r = m.get(k), e = est(t); r[e === "late-run" ? "late" : e]++; r.total++; });
+    const ls = [...m.values()].sort((a, b) => (!a.l) - (!b.l) || b.late - a.late || (b.total - b.ok) - (a.total - a.ok) || a.l.localeCompare(b.l, "pt-BR"));
+    if (ls.some(r => r.l)) {
+      h += `<section class="grupo"><div class="grupo-h"><h2>📍 Por local</h2><span class="cnt">${ls.filter(r => r.l).length}</span></div><div class="pn-lista">${ls.map(r => { const pct = v => (100 * v / r.total).toFixed(1) + "%";
+        return `<button class="pn-item" data-act="painel-local" data-k="${esc(r.l || SEM_LOCAL)}"><span class="pn-l"><b>${r.l ? esc(r.l) : "Sem local"}</b></span>
+        <span class="pn-bar" aria-hidden="true"><i class="late" style="width:${pct(r.late)}"></i><i class="run" style="width:${pct(r.run)}"></i><i class="pend" style="width:${pct(r.pend)}"></i><i class="ok" style="width:${pct(r.ok)}"></i></span>
+        <small>${[r.late ? `<span class="late-txt">${r.late} atrasada${r.late > 1 ? "s" : ""}</span>` : "", r.run ? r.run + " em andamento" : "", r.pend ? r.pend + " a iniciar" : "", r.ok ? r.ok + " concluída" + (r.ok > 1 ? "s" : "") : ""].filter(Boolean).join(" · ")}</small></button>`; }).join("")}</div></section>`;
+    }
+  }
   return h;
 }
 
@@ -357,6 +392,7 @@ function formEditar(t) {
   <label class="f">Entregar até<input id="ed-prazo" type="datetime-local" value="${esc(t.prazo && !t.prazo.includes("T") ? t.prazo + "T18:00" : t.prazo || "")}"></label>
   <div class="prio-btns">${Object.entries(PRIO).map(([k, p]) => `<button class="p-${k} ${E.prioridade === k ? "on" : ""}" data-act="ed-prio" data-k="${k}">${p.i} ${p.l}</button>`).join("")}</div>
   <label class="f">Título<input id="ed-titulo" maxlength="200" value="${esc(t.descricao)}"></label>
+  <label class="f">📍 Local<input id="ed-local" maxlength="80" list="locais-dl" value="${esc(localDe(t))}" placeholder="Ex.: Praça, Coreto"></label>${datalistLocais()}
   <label class="f">Detalhes<textarea id="ed-det" maxlength="1000">${esc(t.detalhes || "")}</textarea></label>
   <p class="note">Quem você tirar da tarefa perde o registro de ciente, início e fim dela.</p>
   <div class="row"><button class="primary" data-act="ed-save" data-id="${t.id}">Salvar</button><button data-act="cancel">Cancelar</button></div></div>`;
@@ -379,7 +415,7 @@ function card(t) {
   const e = estado(t), open = S.open.has(t.id), m = !G() && minha(t), ps = pessoasDe(t), pr = prio(t);
   const pill = { pend: ["", "A iniciar"], run: ["run", "Em andamento"], ok: ["ok", "Concluída"], late: ["late", "Atrasada"], "late-run": ["late", "Atrasada · em andamento"] }[e];
   const obs = S.d.obs.filter(o => o.tarefa_id === t.id), anx = (S.d.anexos || []).filter(x => x.tarefa_id === t.id);
-  const cientes = ps.filter(p => p.ciente || p.inicio || p.fim).length, setor = setorNome(t);
+  const cientes = ps.filter(p => p.ciente || p.inicio || p.fim).length, setor = localDe(t);
   const outros = m ? ps.filter(p => p.func_id !== EU()) : ps;
   let h = `<article class="task p-${pr} ${open ? "open" : ""}"><div class="task-h" data-act="toggle" data-id="${t.id}" role="button" aria-expanded="${open}">
   <div class="t"><div class="d">${esc(t.descricao)}</div><div class="meta"><span class="prio-txt p-${pr}">${PRIO[pr].i} ${PRIO[pr].l}</span>
@@ -883,7 +919,7 @@ async function enviarArquivos(id, files) {
 }
 function guardarWz() {
   const W = S.wz;
-  [["wz-prazo", "prazo"], ["wz-titulo", "titulo"], ["wz-det", "detalhes"]].forEach(([id, k]) => { const el = document.getElementById(id); if (el) W[k] = el.value.trim(); });
+  [["wz-prazo", "prazo"], ["wz-titulo", "titulo"], ["wz-det", "detalhes"], ["wz-local", "local"]].forEach(([id, k]) => { const el = document.getElementById(id); if (el) W[k] = el.value.trim(); });
   const sv = document.getElementById("wz-salvar"); if (sv) W.salvarModelo = sv.checked;
 }
 document.addEventListener("input", ev => { if (ev.target.id && ev.target.id.startsWith("wz-") && ev.target.type !== "file") guardarWz(); });
@@ -900,8 +936,10 @@ document.addEventListener("click", async ev => {
     case "push-teste": try { await assinarPush(true); S.err = ""; } catch (e) { S.err = "Não consegui mandar o teste: " + e.message; } return draw();
     case "tab": S.tab = b.dataset.k; S.ed = null; if (S.tab === "nova" && S.wz.criada) S.wz = novoWz(); return draw();
     case "fprio": S.fPrio = b.dataset.k; return draw();
-    case "painel-filtro": S.tab = "acompanhar"; S.fStatus = b.dataset.k; S.fPrio = "todas"; S.fPessoa = ""; draw(); window.scrollTo({ top: 0 }); return;
-    case "painel-pessoa": S.tab = "acompanhar"; S.fStatus = "todas"; S.fPrio = "todas"; S.fPessoa = String(id); draw(); window.scrollTo({ top: 0 }); return;
+    case "painel-filtro": S.tab = "acompanhar"; S.fStatus = b.dataset.k; S.fPrio = "todas"; draw(); window.scrollTo({ top: 0 }); return;
+    case "painel-pessoa": S.fPessoa = String(id); draw(); window.scrollTo({ top: 0 }); return;
+    case "painel-local": S.fLocal = b.dataset.k; draw(); window.scrollTo({ top: 0 }); return;
+    case "limpar-filtros": S.fLocal = ""; S.fPessoa = ""; return draw();
     case "fstatus": S.fStatus = b.dataset.k; return draw();
     case "toggle": if (S.open.has(id)) S.open.delete(id); else { S.open.add(id); if (!G()) { marcarVistas([id]); marcarCiente(id); } } return draw();
     case "cancel": S.ed = S.editingObs = null; return draw();
@@ -916,7 +954,7 @@ document.addEventListener("click", async ev => {
     case "wz-todos": { const all = S.d.funcionarios.map(f => f.id); S.wz.pessoas = S.wz.pessoas.size === all.length ? new Set() : new Set(all); return draw(); }
     case "wz-rapido": S.wz.prazo = b.dataset.k; { const el = document.getElementById("wz-prazo"); if (el) el.value = b.dataset.k; } return draw();
     case "wz-modelo": { const m = (S.d.modelos || []).find(x => x.id === id); if (!m) return;
-      S.wz = Object.assign(novoWz(), { pessoas: new Set(m.pessoas.filter(i => S.d.funcionarios.some(f => f.id === i))), prioridade: PRIO[m.prioridade] ? m.prioridade : "normal", titulo: m.titulo, detalhes: m.detalhes || "", modelo: m.titulo });
+      S.wz = Object.assign(novoWz(), { pessoas: new Set(m.pessoas.filter(i => S.d.funcionarios.some(f => f.id === i))), prioridade: PRIO[m.prioridade] ? m.prioridade : "normal", titulo: m.titulo, detalhes: m.detalhes || "", local: m.local || "", modelo: m.titulo });
       S.wz.passo = S.wz.pessoas.size ? 2 : 1; draw(); window.scrollTo({ top: 0 }); return; }
     case "pz": return acao("POST", `/api/tarefas/${id}/prazo`, { prazo: b.dataset.k });
     case "pz-outro": S.prazoDe = id; return draw();
@@ -971,7 +1009,7 @@ document.addEventListener("click", async ev => {
       if (!W.titulo) { S.err = "Escreva o título da tarefa."; draw(); const el = document.getElementById("wz-titulo"); if (el) el.focus(); return; }
       if (S.busy) return; S.busy = true; S.err = ""; b.disabled = true; b.textContent = "Criando…";
       try {
-        const r = await api("POST", "/api/tarefas", { pessoas: [...W.pessoas], prazo: W.prazo, prioridade: W.prioridade, titulo: W.titulo, detalhes: W.detalhes, salvarModelo: !W.modelo && !!W.salvarModelo });
+        const r = await api("POST", "/api/tarefas", { pessoas: [...W.pessoas], prazo: W.prazo, prioridade: W.prioridade, titulo: W.titulo, detalhes: W.detalhes, local: W.local, salvarModelo: !W.modelo && !!W.salvarModelo });
         try { await enviarArquivos(r.id, W.arquivos); } catch (e) { S.err = "Tarefa criada, mas um anexo falhou: " + e.message; }
         S.wz = novoWz(); S.wz.criada = r.id;
       } catch (e) { S.err = e.message; }
@@ -980,7 +1018,7 @@ document.addEventListener("click", async ev => {
     case "et": { const t = S.d.tarefas.find(x => x.id === id); S.ed = { id, pessoas: new Set(pessoasDe(t).map(p => p.func_id)), prioridade: prio(t) }; return draw(); }
     case "ed-pessoa": S.ed.pessoas.has(id) ? S.ed.pessoas.delete(id) : S.ed.pessoas.add(id); return draw();
     case "ed-prio": S.ed.prioridade = b.dataset.k; return draw();
-    case "ed-save": { const body = { pessoas: [...S.ed.pessoas], prioridade: S.ed.prioridade, prazo: val("ed-prazo"), titulo: val("ed-titulo"), detalhes: val("ed-det") };
+    case "ed-save": { const body = { pessoas: [...S.ed.pessoas], prioridade: S.ed.prioridade, prazo: val("ed-prazo"), titulo: val("ed-titulo"), detalhes: val("ed-det"), local: val("ed-local") };
       try { S.busy = true; await api("PATCH", "/api/tarefas/" + id, body); S.ed = null; S.err = ""; } catch (e) { S.err = e.message; }
       S.busy = false; return carregar(); }
     case "del-task": S.open.delete(id); return acao("DELETE", "/api/tarefas/" + id);
@@ -1028,6 +1066,7 @@ function reduzir(file0) {
 }
 document.addEventListener("change", async ev => {
   if (ev.target.id === "f-pessoa") { S.fPessoa = ev.target.value; return draw(); }
+  if (ev.target.id === "f-local") { S.fLocal = ev.target.value; return draw(); }
   if (ev.target.id === "foto-seg") {
     const f0 = ev.target.files[0]; ev.target.value = ""; if (!f0) return;
     S.busy = true; S.err = ""; S.enviandoFoto = 1; draw();
