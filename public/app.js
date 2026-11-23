@@ -129,12 +129,12 @@ function drawInner() {
   stats.innerHTML = `<span>${c.pend} a iniciar</span><span>${c.run} em andamento</span><span>${c.ok} concluídas</span>${c.late ? `<span>${c.late} atrasadas</span>` : ""}`;
 
   if (G()) {
-    const tabs = [["nova", "＋ Nova tarefa"], ["acompanhar", "Acompanhar"], ["equipe", "Equipe"], ["seg", "🛡 Segurança"]];
+    const tabs = [["nova", "＋ Nova tarefa"], ["painel", "📊 Painel"], ["acompanhar", "Acompanhar"], ["equipe", "Equipe"], ["seg", "🛡 Segurança"]];
     if (!S.tab || !tabs.some(x => x[0] === S.tab)) S.tab = "nova";
     h += `<nav class="tabs">${tabs.map(([k, l]) => chip("tab", k, S.tab === k, l)).join("")}</nav>`;
     if (S.tab !== "equipe" && S.tab !== "seg") h += alertas();
     h += botaoPush();
-    h += S.tab === "nova" ? wizard() : S.tab === "equipe" ? equipe() : S.tab === "seg" ? segGestor() : acompanhar();
+    h += S.tab === "nova" ? wizard() : S.tab === "equipe" ? equipe() : S.tab === "seg" ? segGestor() : S.tab === "painel" ? painel() : acompanhar();
   } else if (S.d.eu.panico) {
     if (S.tab !== "seg") S.tab = "tarefas";
     h += `<nav class="tabs">${chip("tab", "tarefas", S.tab === "tarefas", "Minhas tarefas")}${chip("tab", "seg", S.tab === "seg", "🛡 Seguranças")}</nav>`;
@@ -262,12 +262,12 @@ const ACEITA = "image/*,.jpg,.jpeg,.png,.heic,.pdf,application/pdf,.doc,.docx,.x
 function acompanhar() {
   const arq = S.fStatus === "arquivadas", ts = S.d.tarefas.filter(t => arq ? t.arquivada : !t.arquivada);
   let h = `<p class="h3" style="margin-top:12px">Prioridade</p><nav class="tabs prio">${chip("fprio", "todas", S.fPrio === "todas", "Todas")}${Object.entries(PRIO).map(([k, p]) => chip("fprio", k, S.fPrio === k, `${p.i} ${p.l}`)).join("")}</nav>`;
-  const st = [["abertas", "Abertas"], ["andamento", "Em andamento"], ["atrasadas", "Atrasadas"], ["concluidas", "Concluídas"], ["todas", "Todas"], ["arquivadas", "🗄 Arquivadas"]];
+  const st = [["abertas", "Abertas"], ["iniciar", "A iniciar"], ["andamento", "Em andamento"], ["atrasadas", "Atrasadas"], ["concluidas", "Concluídas"], ["todas", "Todas"], ["arquivadas", "🗄 Arquivadas"]];
   if (!st.some(x => x[0] === S.fStatus)) S.fStatus = "abertas";
   h += `<nav class="tabs st" style="padding-top:6px">${st.map(([k, l]) => chip("fstatus", k, S.fStatus === k, l)).join("")}</nav>`;
   h += `<label class="f" style="margin-top:8px">Colaborador<select id="f-pessoa" data-act-change="fpessoa"><option value="">Todos</option>${S.d.funcionarios.map(f => `<option value="${f.id}" ${String(f.id) === S.fPessoa ? "selected" : ""}>${esc(f.nome)}</option>`).join("")}</select></label>`;
   const okSt = t => { const e = estado(t); switch (S.fStatus) {
-    case "abertas": return e !== "ok"; case "andamento": return e === "run" || e === "late-run";
+    case "abertas": return e !== "ok"; case "iniciar": return e === "pend"; case "andamento": return e === "run" || e === "late-run";
     case "atrasadas": return e === "late" || e === "late-run"; case "concluidas": return e === "ok"; default: return true; } };
   const list = ts.filter(t => okSt(t) && (S.fPrio === "todas" || prio(t) === S.fPrio) && (!S.fPessoa || S.d.pessoas.some(p => p.tarefa_id === t.id && String(p.func_id) === S.fPessoa)));
   const fimDe = t => Math.max(0, ...pessoasDe(t).map(p => p.fim || 0));
@@ -277,6 +277,54 @@ function acompanhar() {
   if (!ts.length) return h + `<div class="empty">${arq ? "Nenhuma tarefa arquivada." : "Nenhuma tarefa ainda. Use <b>＋ Nova tarefa</b> para criar a primeira."}</div>`;
   if (!list.length) return h + `<div class="empty">Nada neste filtro.</div>`;
   return h + lista(list, S.fPrio === "todas" && S.fStatus !== "concluidas" && !arq);
+}
+
+/* ---------- gestor: painel das tarefas agendadas ---------- */
+const ROT = { pend: ["A iniciar", ""], run: ["Em andamento", "run"], "late-run": ["Atrasada · em andamento", "late"], late: ["Atrasada", "late"], ok: ["Concluída", "ok"] };
+function diaSP(ms) { return new Date(ms).toLocaleString("sv-SE", { timeZone: TZ }).slice(0, 10); }
+function painel() {
+  const ts = ativas(), hoje = agora().slice(0, 10), amanha = diaSP(Date.now() + 864e5), semana = diaSP(Date.now() + 7 * 864e5);
+  if (!ts.length) return `<div class="empty">Nenhuma tarefa agendada ainda. Use <b>＋ Nova tarefa</b> para criar a primeira.</div>`;
+  const c = { late: 0, pend: 0, run: 0, ok: 0 };
+  ts.forEach(t => { const e = estado(t); c[e === "late-run" ? "late" : e]++; });
+  const tile = (k, n, l, cls) => `<button class="pn-tile ${cls}" data-act="painel-filtro" data-k="${k}"><b>${n}</b><span>${l}</span></button>`;
+  let h = `<section class="grupo"><div class="grupo-h"><h2>📊 Resumo</h2><span class="cnt">${ts.length} ${ts.length === 1 ? "tarefa" : "tarefas"}</span></div>
+    <div class="pn-tiles">${tile("atrasadas", c.late, "Atrasadas", "late")}${tile("iniciar", c.pend, "A iniciar", "")}${tile("andamento", c.run, "Em andamento", "run")}${tile("concluidas", c.ok, "Concluídas", "ok")}</div>
+    <p class="note">Toque num número para ver a lista dessas tarefas.</p></section>`;
+
+  // Agenda: tarefas que ainda não terminaram, separadas pela data de entrega
+  const abertas = ts.filter(aberta).sort((a, b) => (a.prazo || "9999").localeCompare(b.prazo || "9999") || (PRIO[prio(a)].r - PRIO[prio(b)].r));
+  const blocos = [["🚨 Atrasadas", t => atrasado(t.prazo)], ["Hoje", t => !atrasado(t.prazo) && t.prazo && t.prazo.slice(0, 10) === hoje],
+    ["Amanhã", t => t.prazo && t.prazo.slice(0, 10) === amanha], ["Próximos 7 dias", t => t.prazo && t.prazo.slice(0, 10) > amanha && t.prazo.slice(0, 10) <= semana],
+    ["Mais para frente", t => t.prazo && t.prazo.slice(0, 10) > semana], ["Sem data de entrega", t => !t.prazo]];
+  const linha = t => { const e = estado(t), ps = pessoasDe(t), feitos = ps.filter(p => p.fim).length;
+    return `<button class="pn-item" data-act="ir-tarefa" data-id="${t.id}"><span class="pn-l">${PRIO[prio(t)].i} <b>${esc(t.descricao)}</b></span>
+      <small>${t.prazo ? "Entrega " + fmtD(t.prazo) : "Sem prazo"} · ${esc(ps.map(p => nome(p.func_id)).join(", ") || "ninguém")}${ps.length > 1 ? ` · ${feitos} de ${ps.length} terminaram` : ""}</small>
+      <span class="pill ${ROT[e][1]}">${ROT[e][0]}</span></button>`; };
+  h += `<section class="grupo"><div class="grupo-h"><h2>📅 Agenda de entregas</h2><span class="cnt">${abertas.length} a fazer</span></div>`;
+  if (!abertas.length) h += `<div class="empty">Tudo entregue! Nenhuma tarefa pendente.</div>`;
+  let usadas = new Set();
+  for (const [titulo, f] of blocos) {
+    const l = abertas.filter(t => !usadas.has(t.id) && f(t)); if (!l.length) continue;
+    l.forEach(t => usadas.add(t.id));
+    h += `<p class="h3 pn-dia">${titulo} <span class="cnt">${l.length}</span></p><div class="pn-lista">${l.map(linha).join("")}</div>`;
+  }
+  h += `</section>`;
+
+  // Por colaborador: quanto cada um tem para fazer
+  const porPessoa = S.d.funcionarios.map(f => { const r = { f, pend: 0, run: 0, late: 0, ok: 0, prox: null };
+    S.d.pessoas.forEach(p => { if (p.func_id !== f.id) return; const t = ts.find(x => x.id === p.tarefa_id); if (!t) return;
+      const e = estadoP(p, t); if (e === "ok") r.ok++; else { if (e.startsWith("late")) r.late++; else if (e === "run") r.run++; else r.pend++;
+        if (t.prazo && !atrasado(t.prazo) && (!r.prox || t.prazo < r.prox)) r.prox = t.prazo; } });
+    r.total = r.pend + r.run + r.late + r.ok; return r; }).filter(r => r.total).sort((a, b) => b.late - a.late || (b.pend + b.run) - (a.pend + a.run) || a.f.nome.localeCompare(b.f.nome));
+  h += `<section class="grupo"><div class="grupo-h"><h2>👥 Por colaborador</h2><span class="cnt">${porPessoa.length}</span></div>`;
+  if (!porPessoa.length) h += `<div class="empty">Ninguém com tarefa agendada.</div>`;
+  h += `<div class="pn-lista">${porPessoa.map(r => { const pct = v => (100 * v / r.total).toFixed(1) + "%";
+    return `<button class="pn-item" data-act="painel-pessoa" data-id="${r.f.id}"><span class="pn-l"><b>${esc(r.f.nome)}</b></span>
+      <span class="pn-bar" aria-hidden="true"><i class="late" style="width:${pct(r.late)}"></i><i class="run" style="width:${pct(r.run)}"></i><i class="pend" style="width:${pct(r.pend)}"></i><i class="ok" style="width:${pct(r.ok)}"></i></span>
+      <small>${[r.late ? `<span class="late-txt">${r.late} atrasada${r.late > 1 ? "s" : ""}</span>` : "", r.run ? r.run + " em andamento" : "", r.pend ? r.pend + " a iniciar" : "", r.ok ? r.ok + " concluída" + (r.ok > 1 ? "s" : "") : ""].filter(Boolean).join(" · ")}${r.prox ? ` · próxima entrega ${fmtD(r.prox)}` : ""}</small></button>`; }).join("")}</div>`;
+  h += `<p class="note pn-leg"><i class="late"></i> atrasada <i class="run"></i> em andamento <i class="pend"></i> a iniciar <i class="ok"></i> concluída</p></section>`;
+  return h;
 }
 
 function equipe() {
@@ -852,6 +900,8 @@ document.addEventListener("click", async ev => {
     case "push-teste": try { await assinarPush(true); S.err = ""; } catch (e) { S.err = "Não consegui mandar o teste: " + e.message; } return draw();
     case "tab": S.tab = b.dataset.k; S.ed = null; if (S.tab === "nova" && S.wz.criada) S.wz = novoWz(); return draw();
     case "fprio": S.fPrio = b.dataset.k; return draw();
+    case "painel-filtro": S.tab = "acompanhar"; S.fStatus = b.dataset.k; S.fPrio = "todas"; S.fPessoa = ""; draw(); window.scrollTo({ top: 0 }); return;
+    case "painel-pessoa": S.tab = "acompanhar"; S.fStatus = "todas"; S.fPrio = "todas"; S.fPessoa = String(id); draw(); window.scrollTo({ top: 0 }); return;
     case "fstatus": S.fStatus = b.dataset.k; return draw();
     case "toggle": if (S.open.has(id)) S.open.delete(id); else { S.open.add(id); if (!G()) { marcarVistas([id]); marcarCiente(id); } } return draw();
     case "cancel": S.ed = S.editingObs = null; return draw();
