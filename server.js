@@ -142,7 +142,7 @@ const SUSPENSO = process.env.APP_SUSPENSO === "1";
 if (SUSPENSO) app.use((req, res) => {
   res.set("Cache-Control", "no-store");
   if (req.path.startsWith("/api") || req.path === "/versao") return res.status(503).json({ erro: "Acesso suspenso no momento." });
-  res.status(503).type("html").send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+  res.status(200).type("html").send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Natal Osasco</title>
 <style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;background:#0f3d2e;color:#fff;text-align:center;padding:24px;box-sizing:border-box}
 h1{font-size:1.5rem;margin:0 0 12px}p{opacity:.85;margin:0}</style></head>
