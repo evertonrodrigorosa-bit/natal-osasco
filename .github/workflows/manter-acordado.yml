@@ -1,10 +1,9 @@
 # Mantém o site acordado: o plano grátis do Render dorme após 15 minutos sem acesso,
 # e dormindo ele não manda o alarme da ronda nem o aviso de prazo.
 name: Manter o site acordado
-# PAUSADO (2026-11-25): app com acesso suspenso. Para religar, tire o # das duas linhas abaixo.
 on:
-  # schedule:
-  #   - cron: "*/5 * * * *"
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 jobs:
   ping:
